@@ -14,5 +14,6 @@ struct DSApp: App {
         WindowGroup {
             RootView()
         }
+        .modelContainer(ConversationStore.shared.container)
     }
 }

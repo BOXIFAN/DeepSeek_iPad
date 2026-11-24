@@ -27,15 +27,71 @@ final class ChatViewModel {
     /// 来自 `title` 参数的服务端会话标题
     private(set) var generatedTitle: String?
     var errorText: String?
-    /// 每次收到流事件自增，供视图层触发滚动跟随。
+    /// 每次收到流事件自增，供视图层触发滚动跟随
     private(set) var streamTick = 0
 
+    private(set) var currentConversation: StoredConversation?
+    var conversationTitle: String = "新对话"
+
+    private let store = ConversationStore.shared
     private let client = ChatClient()
     private var task: Task<Void, Never>?
 
-    /// 协议层历史。TODO(里程碑 1)：改成把每轮 assistant 的原始块 JSON 原样回传，
-    /// 现在只回传正文，多轮会丢失「模型读过哪个网页」这类上下文。
+    /// 协议层历史。助手轮存原始块数组，`signature` 等字段原样保留。
     private var history: [[String: Any]] = []
+    /// content_block_start 下发的原始 JSON，回传时作为骨架
+    private var blockTemplates: [Int: Data] = [:]
+    /// signature_delta 累积
+    private var blockSignatures: [Int: String] = [:]
+
+    // MARK: - 会话
+
+    /// 开一个新会话。下次发送时才真正写库，避免点一下就留一条空会话。
+    func startNew() {
+        task?.cancel()
+        task = nil
+        isStreaming = false
+        messages = []
+        history = []
+        blockTemplates = [:]
+        blockSignatures = [:]
+        errorText = nil
+        generatedTitle = nil
+        currentConversation = nil
+        conversationTitle = "新对话"
+    }
+
+    func load(_ conversation: StoredConversation) {
+        task?.cancel()
+        task = nil
+        isStreaming = false
+        currentConversation = conversation
+        conversationTitle = conversation.title
+        blockTemplates = [:]
+        blockSignatures = [:]
+        errorText = nil
+        generatedTitle = nil
+
+        messages = conversation.sortedMessages.map { stored in
+            if stored.role == "user" {
+                return DisplayMessage(id: stored.id.uuidString,
+                                      role: .user,
+                                      text: stored.plainText,
+                                      blocks: [])
+            }
+            return DisplayMessage(id: stored.id.uuidString,
+                                  role: .assistant,
+                                  text: "",
+                                  blocks: ContentBlock.decodeAll(stored.rawBlocks),
+                                  stopReason: stored.status)
+        }
+
+        history = conversation.sortedMessages.compactMap { stored in
+            let content = stored.rawBlocks
+            guard !content.isEmpty else { return nil }
+            return ["role": stored.role, "content": content]
+        }
+    }
 
     // MARK: - 发送
 
@@ -46,6 +102,20 @@ final class ChatViewModel {
         guard !apiKey.isEmpty else {
             errorText = "还没填 API Key，先去设置里填一下"
             return
+        }
+
+        if currentConversation == nil {
+            currentConversation = store.create(model: options.model)
+        }
+        if let conversation = currentConversation {
+            // 首条用户消息顺便定标题，落库后重启才不会退回「新对话」
+            let isFirstMessage = conversation.messages.isEmpty
+            store.append(to: conversation,
+                         role: "user",
+                         blocks: [["type": "text", "text": text]],
+                         plainText: text,
+                         autoTitle: isFirstMessage ? String(text.prefix(24)) : nil)
+            conversationTitle = conversation.title
         }
 
         messages.append(DisplayMessage(id: UUID().uuidString, role: .user, text: text, blocks: []))
@@ -73,6 +143,7 @@ final class ChatViewModel {
                 self.update(assistantID) { message in
                     message.errorText = error.localizedDescription
                     message.isStreaming = false
+                    message.stopReason = "failed"
                 }
             }
             self.finish(assistantID)
@@ -87,17 +158,7 @@ final class ChatViewModel {
             messages[index].isStreaming = false
             messages[index].stopReason = "stopped"
         }
-        persistLastAssistant()
-    }
-
-    func reset() {
-        task?.cancel()
-        task = nil
-        messages = []
-        history = []
-        isStreaming = false
-        errorText = nil
-        generatedTitle = nil
+        finish(messages.last(where: { $0.role == .assistant })?.id)
     }
 
     // MARK: - 事件应用
@@ -108,7 +169,8 @@ final class ChatViewModel {
         case .messageStart:
             break
 
-        case .blockStart(let index, let block):
+        case .blockStart(let index, let block, let raw):
+            blockTemplates[index] = raw
             update(messageID) { message in
                 if index < message.blocks.count {
                     message.blocks[index] = block
@@ -118,21 +180,21 @@ final class ChatViewModel {
             }
 
         case .blockDelta(let index, let delta):
+            if case .signature(let chunk) = delta {
+                blockSignatures[index] = (blockSignatures[index] ?? "") + chunk
+            }
             update(messageID) { message in
                 guard index < message.blocks.count else { return }
                 message.blocks[index] = Self.apply(delta, to: message.blocks[index])
             }
 
         case .blockStop(let index):
-            // 思考块结束时补上用时，供「已深度思考（用时 N 秒）」展示
             update(messageID) { message in
                 guard index < message.blocks.count,
                       case .thinking(let id, let text, nil) = message.blocks[index] else { return }
-                message.blocks[index] = .thinking(
-                    id: id,
-                    text: text,
-                    duration: Date().timeIntervalSince(startedAt)
-                )
+                message.blocks[index] = .thinking(id: id,
+                                                 text: text,
+                                                 duration: Date().timeIntervalSince(startedAt))
             }
 
         case .messageDelta(let stopReason, let title, _):
@@ -148,9 +210,10 @@ final class ChatViewModel {
 
         case .failure(let message):
             errorText = message
-            update(messageID) { message2 in
-                message2.errorText = message
-                message2.isStreaming = false
+            update(messageID) { item in
+                item.errorText = message
+                item.isStreaming = false
+                item.stopReason = "failed"
             }
         }
     }
@@ -176,23 +239,65 @@ final class ChatViewModel {
 
     // MARK: - 收尾
 
-    private func finish(_ messageID: String) {
+    private func finish(_ messageID: String?) {
         isStreaming = false
-        update(messageID) { $0.isStreaming = false }
-        persistLastAssistant()
-    }
+        if let messageID {
+            update(messageID) { $0.isStreaming = false }
+        }
 
-    private func persistLastAssistant() {
         guard let last = messages.last(where: { $0.role == .assistant }) else { return }
-        let text = last.blocks.compactMap { block -> String? in
+        let content = buildAssistantContent(from: last)
+
+        blockTemplates.removeAll()
+        blockSignatures.removeAll()
+
+        guard !content.isEmpty else { return }
+
+        history.append(["role": "assistant", "content": content])
+
+        let plain = last.blocks.compactMap { block -> String? in
             if case .text(_, let text, _) = block { return text }
             return nil
         }.joined()
-        guard !text.isEmpty else { return }
-        history.append([
-            "role": "assistant",
-            "content": [["type": "text", "text": text]]
-        ])
+
+        if let conversation = currentConversation {
+            store.append(to: conversation,
+                         role: "assistant",
+                         blocks: content,
+                         plainText: plain,
+                         status: last.stopReason ?? "complete",
+                         autoTitle: generatedTitle)
+            conversationTitle = conversation.title
+        }
+    }
+
+    /// 用模板骨架 + 最终内容还原原始块数组。
+    ///
+    /// 直接回传 `content_block_start` 的模板会丢掉流式拼出来的正文，只拼纯文本又会
+    /// 丢掉 `signature` 与 `encrypted_content`。这里两条都保住。
+    private func buildAssistantContent(from message: DisplayMessage) -> [[String: Any]] {
+        var content: [[String: Any]] = []
+        for index in blockTemplates.keys.sorted() {
+            guard let data = blockTemplates[index],
+                  var dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                continue
+            }
+            if index < message.blocks.count {
+                switch message.blocks[index] {
+                case .thinking(_, let text, _):
+                    dict["thinking"] = text
+                    if let signature = blockSignatures[index], !signature.isEmpty {
+                        dict["signature"] = signature
+                    }
+                case .text(_, let text, _):
+                    dict["text"] = text
+                default:
+                    break
+                }
+            }
+            content.append(dict)
+        }
+        return content
     }
 
     private func update(_ messageID: String, _ mutate: (inout DisplayMessage) -> Void) {

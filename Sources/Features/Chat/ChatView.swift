@@ -1,7 +1,6 @@
 import SwiftUI
 
 struct ChatView: View {
-    var conversation: Conversation?
     var viewModel: ChatViewModel
 
     @AppStorage("model") private var model = "deepseek-flash"
@@ -57,7 +56,7 @@ struct ChatView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    viewModel.reset()
+                    viewModel.startNew()
                 } label: {
                     Image(systemName: "square.and.pencil")
                 }
@@ -74,7 +73,7 @@ struct ChatView: View {
         if let generated = viewModel.generatedTitle, !generated.isEmpty {
             return generated
         }
-        return conversation?.title ?? "新对话"
+        return viewModel.conversationTitle
     }
 
     // MARK: - 消息

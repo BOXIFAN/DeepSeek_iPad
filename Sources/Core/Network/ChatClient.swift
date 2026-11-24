@@ -36,7 +36,7 @@ enum BlockDelta: Sendable {
 /// message_start → (blockStart → delta… → blockStop)* → message_delta → message_stop
 enum StreamEvent: Sendable {
     case messageStart
-    case blockStart(index: Int, block: ContentBlock)
+    case blockStart(index: Int, block: ContentBlock, raw: Data)
     case blockDelta(index: Int, delta: BlockDelta)
     case blockStop(index: Int)
     case messageDelta(stopReason: String?, title: String?, usage: Usage?)
@@ -188,10 +188,12 @@ final class ChatClient {
         case "content_block_start":
             guard let index = json["index"] as? Int,
                   let raw = json["content_block"] as? [String: Any],
-                  let block = makeBlock(raw, index: index) else {
+                  let block = ContentBlock.make(from: raw, id: "stream-\(index)") else {
                 return []
             }
-            return [.blockStart(index: index, block: block)]
+            // 原始块 JSON 一并带出，多轮回传时要原样送回（signature 就藏在里面）
+            let rawData = (try? JSONSerialization.data(withJSONObject: raw)) ?? Data()
+            return [.blockStart(index: index, block: block, raw: rawData)]
 
         case "content_block_delta":
             guard let index = json["index"] as? Int,
@@ -243,104 +245,6 @@ final class ChatClient {
                 title: raw["title"] as? String,
                 citedText: raw["cited_text"] as? String
             ))
-        default:
-            return nil
-        }
-    }
-
-    private static func makeBlock(_ raw: [String: Any], index: Int) -> ContentBlock? {
-        let id = "stream-\(index)"
-        let type = raw["type"] as? String ?? ""
-
-        switch type {
-        case "thinking":
-            return .thinking(id: id,
-                             text: raw["thinking"] as? String ?? "",
-                             duration: nil)
-
-        case "text":
-            return .text(id: id,
-                         text: raw["text"] as? String ?? "",
-                         citations: parseCitations(raw["citations"]))
-
-        case "server_tool_use":
-            guard let input = raw["input"] as? [String: Any],
-                  let action = parseAction(input) else { return nil }
-            let kind = BlockKind(rawValue: raw["kind"] as? String ?? "") ?? .search
-            return .toolCall(id: raw["id"] as? String ?? id,
-                             name: raw["name"] as? String ?? "",
-                             kind: kind,
-                             action: action)
-
-        case "web_search_tool_result":
-            let results = (raw["content"] as? [[String: Any]])?.compactMap { item -> SearchResult? in
-                guard (item["type"] as? String) == "web_search_result" else { return nil }
-                return SearchResult(
-                    title: item["title"] as? String ?? "",
-                    url: item["url"] as? String ?? "",
-                    snippet: item["snippet"] as? String,
-                    siteName: item["site_name"] as? String,
-                    siteIcon: item["site_icon"] as? String,
-                    pageAge: item["page_age"] as? String
-                )
-            } ?? []
-            var errorCode: String?
-            if let first = (raw["content"] as? [[String: Any]])?.first,
-               first["type"] as? String == "web_search_tool_result_error" {
-                errorCode = first["error_code"] as? String
-            }
-            let kind = BlockKind(rawValue: raw["kind"] as? String ?? "") ?? .search
-            return .searchResults(id: id,
-                                  toolUseID: raw["tool_use_id"] as? String ?? id,
-                                  kind: kind,
-                                  results: results,
-                                  errorCode: errorCode)
-
-        case "web_fetch_tool_result":
-            let content = raw["content"] as? [String: Any]
-            let isError = (content?["type"] as? String) == "web_fetch_tool_result_error"
-            var page = FetchedPage(url: "", title: nil, publishedAt: nil, errorCode: nil)
-            if isError {
-                page.errorCode = content?["error_code"] as? String
-                page.url = raw["tool_use_id"] as? String ?? ""
-            } else {
-                page.url = content?["url"] as? String ?? ""
-                page.publishedAt = content?["published_at"] as? String
-                if let document = content?["content"] as? [String: Any] {
-                    page.title = document["title"] as? String
-                }
-            }
-            let kind = BlockKind(rawValue: raw["kind"] as? String ?? "") ?? .readLink
-            return .fetchedPage(id: id,
-                                toolUseID: raw["tool_use_id"] as? String ?? id,
-                                kind: kind,
-                                page: page)
-
-        default:
-            return nil
-        }
-    }
-
-    private static func parseCitations(_ raw: Any?) -> [Citation] {
-        guard let items = raw as? [[String: Any]] else { return [] }
-        return items.map {
-            Citation(url: $0["url"] as? String ?? "",
-                     title: $0["title"] as? String,
-                     citedText: $0["cited_text"] as? String)
-        }
-    }
-
-    private static func parseAction(_ input: [String: Any]) -> ToolAction? {
-        switch input["action"] as? String {
-        case "search":
-            return .search(queries: input["queries"] as? [String] ?? [])
-        case "open_page":
-            return .openPage(url: input["url"] as? String ?? "")
-        case "find_in_page":
-            return .findInPage(url: input["url"] as? String ?? "",
-                               pattern: input["pattern"] as? String ?? "")
-        case "read_link":
-            return .readLink(url: input["url"] as? String ?? "")
         default:
             return nil
         }
