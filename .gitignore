@@ -1,0 +1,15 @@
+# 构建产物与本地工具
+.build/
+.tools/
+
+# 本机密钥，绝不入库
+.secrets/
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+DerivedData/
+
+# macOS
+.DS_Store
