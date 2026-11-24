@@ -151,6 +151,26 @@ xcrun simctl ui <udid> appearance dark          # 切深色
 
 **横屏截图拿不到**，原因和四条失败路径记在 `BUILD_NOTES.md`。要看横屏得在 Xcode 里 ⌘R 然后 ⌘← 旋转。
 
+### 推代码
+
+仓库：https://github.com/BOXIFAN/DeepSeek_iPad （公开，默认分支 `main`）
+
+`github.com:22` 直连不通，remote 用 443 上的 SSH：
+
+```
+ssh://git@ssh.github.com:443/BOXIFAN/DeepSeek_iPad.git
+```
+
+仓库级 `core.sshCommand` 已配好（绕过 known_hosts 写不进工作区外的问题），`git push` 直接可用。
+
+本机私钥带口令，**重启后需要解锁一次**：
+
+```bash
+ssh-add --apple-use-keychain ~/.ssh/id_ed25519
+```
+
+`api.github.com` 直连可通，`github.com` 网页走系统代理（首字节约 13 秒）。
+
 ---
 
 ## 5. 开发日志
@@ -227,6 +247,19 @@ xcrun simctl ui <udid> appearance dark          # 切深色
 编译通过，空态和设置页截了图（`shots/ipad-empty.png`、`shots/ipad-settings.png`）。
 
 **遗留**：真实流式未验证（等 Key）；历史只回传纯文本（见 §3 的警告）；会话不落盘。
+
+### 2026-11-24 · 第 6 轮：仓库上线 GitHub
+
+**产出**：https://github.com/BOXIFAN/DeepSeek_iPad ，公开仓库，首次提交 `944e0b2`，35 个文件（源码 17 个、文档 3 份、脚本 2 个、截图 8 张、工程文件 2 个）。
+
+**过程中的四个障碍**：
+
+1. `gh` CLI 没装，装它也绕不开认证
+2. 本机没有可用凭据（无 credential helper、无 `.git-credentials`、Keychain 无记录）
+3. `github.com:22` 直连不通，`github.com:443` 直连也超时，只有 `ssh.github.com:443` 与 `api.github.com` 直连可达
+4. 私钥带口令（`aes256-ctr`），非交互环境无法签名；`ssh-add --apple-use-keychain` 解锁一次后可正常使用
+
+**处理**：remote 用 `ssh://git@ssh.github.com:443/...` 形式（端口写在 URL 里，不改 `~/.ssh/config`）；提交邮箱从学号改成 GitHub 主邮箱 `3474189100rua@gmail.com`，只改仓库级配置不影响其他项目；远端那个 2 行的 `Initial commit` README 被 force 覆盖。
 
 ---
 
