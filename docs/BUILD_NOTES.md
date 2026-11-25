@@ -44,14 +44,16 @@ DSH 的 workspace-write 沙盒和 Xcode 工具链有三处冲突，都已解决�
 
 | 变量 | 作用 |
 |---|---|
-| `DS_START_IN_CHAT=1` | 窄屏直接进对话页，跳过会话列表 |
 | `DS_EXPAND_THINKING=1` | 所有思考块默认展开 |
 
 ```bash
-env SIMCTL_CHILD_DS_START_IN_CHAT=1 xcrun simctl launch <udid> com.ruakiu.ipadds
+env SIMCTL_CHILD_DS_DEMO_THREAD=1 env SIMCTL_CHILD_DS_BALANCE_DEMO=1 \
+    xcrun simctl launch <udid> com.ruakiu.ipadds
 xcrun simctl ui <udid> appearance dark      # 切深色
 xcrun simctl io <udid> screenshot out.png
 ```
+
+完整的钩子清单在 `docs/DEVELOPMENT.md` §4，这里只记环境相关的。
 
 ## Xcode 27 没有 Simulator.app GUI
 

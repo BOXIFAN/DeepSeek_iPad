@@ -17,7 +17,7 @@
 | 后端 | 没有。客户端直连 `api.deepseek.com` |
 | API Key | 存本机 Keychain，不进代码、不进 git |
 | 最低部署目标 | iOS 18.0 |
-| 当前代码量 | 17 个 Swift 文件，2462 行 |
+| 当前代码量 | 30 个 Swift 文件，6310 行（含 `Sources/Explore/` 的四套设计存档，正式代码约 4300 行） |
 
 **不做的事**：多用户、云同步、账号体系、计费、上架审核相关内容。这些在"只自己用"的前提下都没有意义，加进来只会拖慢进度。
 
@@ -25,13 +25,13 @@
 
 ## 2. 当前状态
 
-一句话：**界面和网络层已经跑通并能编译运行，但还没有用真实 API 完整验证过，消息也不落盘。**
+一句话：**界面已按浮岛骨架重建，流式与持久化链路都在；手上没有有效 Key，真实请求只验证到 401。**
 
 ### 功能矩阵
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| 双端自适应布局 | ✅ 完成 | iPad 双栏（`NavigationSplitView`）、iPhone 单列推入 |
+| 双端浮岛骨架 | ✅ 完成 | 对话即首页，正文 660 居中；历史收进浮层，iPad 左侧抽屉（0.28s 滑入）、iPhone 半屏 sheet |
 | 内容块渲染器 | ✅ 完成 | 思考折叠、搜索合并条、结果卡片、网页提示、引用角标、表格、代码块 |
 | Markdown 渲染 | ✅ 完成 | 自写的块级解析（标题/列表/表格/代码围栏/引用/分割线），行内样式交给 `AttributedString` |
 | 语法高亮 | ✅ 完成 | Swift / Python / JS / TS / JSON / Bash，正则四类着色 |
@@ -40,24 +40,33 @@
 | SSE 流式解析 | ✅ 代码完成，未真实验证 | 见 §2.1 |
 | 请求构造与错误映射 | ✅ 代码完成，未真实验证 | 401/402/429/400 有中文提示 |
 | 发送 / 停止 | ✅ 完成 | 流式中发送键变停止键 |
-| 设置页 | ✅ 完成 | Key、默认模型、两个默认开关 |
+| 设置页 | ✅ 完成 | Key、默认模型、两个默认开关、系统提示词、技能 |
+| 系统提示词 | ✅ 完成 | 设置里一段全局 system，随每次请求发送 |
+| 思考强度 | ✅ 完成 · 已验请求体 | 关闭 / 低 / 标准 / 高，映射 `output_config.effort`；输入条胶囊可直接改 |
+| 技能 | ✅ 完成 · 文件导入未实测 | 本地指令库，可多选启用；支持手写或从 Markdown 导入（解析 frontmatter） |
+| 内置技能 | ✅ 完成 · 默认可选 | 「结论先行」「术语注解」随 App 安装，**默认不启用**，输入条技能胶囊决定用不用 |
+| 技能进入请求 | ✅ 已验证 | 与默认提示词拼成 `system`，mock 抓包确认；停用的技能不进 |
+| 流式解析 | ✅ 已验证（第 10 轮修复） | 按字节切行保留空行；mock 16 个事件全部还原 |
+| 落库与重启回读 | ✅ 已验证 | mock 回复落库，重启后会话与内容都在 |
 | 会话持久化 | ✅ 完成 | SwiftData，消息以原始协议块 JSON 存储，重启不丢 |
-| 会话列表真实数据 | ✅ 完成 | `@Query` 驱动，按更新时间倒序 |
+| 会话列表真实数据 | ✅ 完成 | `@Query` 驱动，按更新时间倒序，浮层里滑动删除 |
+| API 余额查询 | ✅ 完成 · Key 无效未跑到成功态 | `GET /user/balance`；iPad 左下角卡片、iPhone 输入条右侧胶囊、明细弹层 |
+| 界面方向探索 | ✅ 完成 | `Sources/Explore/` 留了四套首屏存档，`DS_UI_VARIANT` 切换，对比页 `explore/compare.html` |
 | 新会话 / 切换会话 | ✅ 完成 | 新建、点选切换、滑动删除 |
-| 图片上传 | ❌ 未开始 | `+` 按钮空实现 |
+| 图片识别 | ✅ 完成 · 已验请求体 | 输入条选图（最多 4 张）、预览删除、气泡展示；压到 1280 长边 JPEG 0.75 后走 `image` 块 |
 | 文档上传（PDF/DOCX） | ❌ 未开始 | |
 | 语音输入 / 朗读 | ❌ 未开始 | |
 | Mermaid 图表 | ❌ 未开始 | 计划 `WKWebView` + 本地 js |
 | 引用角标弹层 | ⚠️ 代码已写，未验证 | 模拟器点不了，需要真机或 UI 测试 |
-| 真机签名 | ❌ 未开始 | 还没在真机上跑过 |
+| 真机签名 | ⚠️ 步骤已写，未实操 | `docs/DEVICE.md`：Xcode 选 Team + ⌘R，免费账号 7 天有效 |
 
-### 2.1 唯一的关键未验证项
+### 2.1 传输链路已验证，缺一次真实请求
 
-`ChatClient` 的流式解析按官方文档写的，但**没有用真实 Key 跑过一次**。验证时重点看三件事：
+第 10 轮用本地 mock 把整条链路跑通了：请求体、SSE 解析（16 个事件）、渲染、落库、重启回读都验过。剩下的是确认官方返回和 mock 的差异，重点看三件事：
 
-1. 请求头是否需要 `anthropic-version`。当前没有带，官方文档的 Messages 示例里也没出现。如果返回 400，先补这个头。
-2. 事件顺序是否和文档一致（`message_start` → 块事件 → `message_delta` → `message_stop`）。
-3. `content_block_start` 里 `server_tool_use` 的 `input` 结构和 `kind` 字段。
+1. 官方 `content_block_start` 里 `server_tool_use` 的 `input` 结构和 `kind` 字段，是否和 mock 假设的一致。
+2. 联网搜索时 `web_search_tool_result` 的 `encrypted_content` / `signature` 能否原样回传（第 7 轮实现的，没跑过真的）。
+3. `message_delta` 里的 `title` 字段（会话标题）是否真的会来。
 
 验证方法：把 Key 存到 `.secrets/api-key`（已在 `.gitignore` 里），然后
 
@@ -89,23 +98,32 @@ KeychainStore          API Key
 
 | 路径 | 职责 | 行数 |
 |---|---|---|
-| `Sources/App/DSApp.swift` | 入口，调试钩子注入 Key | 18 |
-| `Sources/App/RootView.swift` | 双端布局分支（`horizontalSizeClass`） | 89 |
+| `Sources/App/DSApp.swift` | 入口，调试钩子注入 Key | 19 |
+| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区排布 | 403 |
 | `Core/Models/ContentBlock.swift` | 协议块模型 + `RenderBlock` 分组 | 173 |
-| `Core/Models/Conversation.swift` | 会话数据（暂时是假数据） | 41 |
-| `Core/Models/SampleData.swift` | 预览用样例回复 | 145 |
-| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、错误映射 | 360 |
+| `Core/Models/ContentBlock+Decode.swift` | 块字段解码 | 109 |
+| `Core/Models/SampleData.swift` | 预览与截图用的样例回复 | 145 |
+| `Core/Models/StoredSkill.swift` | 技能模型、Markdown frontmatter 解析、system 组装 | 119 |
+| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、错误映射 | 264 |
 | `Core/Network/SSEParser.swift` | 按行攒事件 | 54 |
+| `Core/Network/BalanceClient.swift` | 余额查询（`Bearer` 鉴权，和聊天不是同一个头） | 115 |
 | `Core/Storage/KeychainStore.swift` | Key 存取 | 61 |
-| `Features/Chat/ChatViewModel.swift` | 流式状态机 | 202 |
-| `Features/Chat/ChatView.swift` | 对话页 + 输入条 | 313 |
-| `Features/Conversations/ConversationSidebar.swift` | iPad 侧栏 | 49 |
-| `Features/Settings/SettingsView.swift` | 设置 | 89 |
+| `Core/Storage/ConversationStore.swift` | 会话增删查改 | 96 |
+| `Core/Storage/StoredModels.swift` | SwiftData 模型 | 72 |
+| `Core/Storage/BalanceStore.swift` | 余额状态、请求节流、低额判断 | 107 |
+| `Features/Chat/ChatViewModel.swift` | 流式状态机 | 332 |
+| `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条、模式胶囊 | 322 |
+| `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 202 |
+| `Features/Settings/SettingsView.swift` | 设置入口，导航到提示词与技能 | 165 |
+| `Features/Settings/SystemPromptView.swift` | 系统提示词编辑 | 49 |
+| `Features/Settings/SkillsView.swift` | 技能列表、导入、编辑 | 263 |
+| `UI/BalanceCard.swift` | 余额卡片、手机端胶囊、明细弹层 | 206 |
 | `UI/Blocks/BlockView.swift` | 各内容块的视图 | 258 |
+| `UI/Markdown/MarkdownView.swift` | Markdown 渲染 + 代码块 + 表格（可选衬线排印） | 311 |
 | `UI/Markdown/MarkdownParser.swift` | 块级 Markdown 解析 | 212 |
-| `UI/Markdown/MarkdownView.swift` | Markdown 渲染 + 代码块 + 表格 | 295 |
 | `UI/Markdown/SyntaxHighlighter.swift` | 正则语法高亮 | 86 |
-| `UI/Theme/Theme.swift` | 颜色与间距常量 | 17 |
+| `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 17 |
+| `Sources/Explore/*` | 四个方向的首屏存档，`DS_UI_VARIANT` 切换 | 2002 |
 
 ### 三个必须知道的决策
 
@@ -113,7 +131,7 @@ KeychainStore          API Key
 
 **多轮历史必须原样回传块，不能只回传纯文本。** 官方明确要求保留 `kind` 和 `signature`，阅读链接的网页正文就加密存在 `signature` 里，丢了之后用户在下一轮问"刚才那个网页"模型会答不上来。
 
-> ⚠️ **当前代码违反这一条**：`ChatViewModel.persistLastAssistant()` 只把正文文本塞回历史。这是第一版为了跑通链路的简化，**必须在做持久化之前修掉**，否则多轮会静默丢上下文。修法：`ChatClient` 解码时连同原始 JSON 一起带出来，历史里存原始块数组。
+> 第 7 轮已按这条修完：`ChatClient` 解码时带出 `content_block_start` 的原始 JSON，`ChatViewModel` 用模板骨架 + 最终文本还原，`signature_delta` 单独累积后写回。现在历史里存的是原始块数组。
 
 **工程文件手写**（`iPadDS.xcodeproj/project.pbxproj`，objectVersion 77）。用 `PBXFileSystemSynchronizedRootGroup` 指向 `Sources`，所以**新增 `.swift` 文件不用改工程文件**，放进目录就会被编译。根目录的 `project.yml` 是 XcodeGen 配置，当前没在用（brew 装不上、GitHub 直连超时）。
 
@@ -140,9 +158,31 @@ KeychainStore          API Key
 | `DS_API_KEY=sk-...` | 启动时写入 Keychain，跳过手动输入 |
 | `DS_AUTO_PROMPT=文字` | 启动即发一条消息，用于端到端验证 |
 | `DS_SHOW_SETTINGS=1` | 启动直接打开设置页 |
-| `DS_START_IN_CHAT=1` | 窄屏跳过会话列表直接进对话 |
+| `DS_SHOW_HISTORY=1` | 启动直接拉出会话历史浮层 |
+| `DS_SHOW_BALANCE=1` | 启动直接打开余额明细 |
+| `DS_START_EMPTY=1` | 不进任何会话，停在空态 |
+| `DS_DEMO_THREAD=1` | 灌入一段示例对话（`SampleData`），不写库 |
+| `DS_DEMO_HISTORY=1` | 历史浮层用五条演示条目，不动 SwiftData |
+| `DS_BALANCE_DEMO=1` | 余额卡填 ¥14.41 的演示值，截图用 |
+| `DS_SETTINGS_PAGE=prompt|skills` | 打开设置后直接进对应子页 |
+| `DS_API_BASE=http://127.0.0.1:8710` | 把聊天与余额请求指到本地 mock |
+| `DS_SELFTEST=1` | 跑离线自检，结果写到沙盒 `Documents/selftest.txt` |
+| `DS_SLOW_ANIM=1` | 抽屉动画放慢到 4 秒，方便逐帧截图 |
+| `DS_DEMO_IMAGE=1` | 配合 `DS_AUTO_PROMPT` 发一条带测试图的请求 |
+| `DS_PENDING_IMAGE=1` | 只在输入条挂一张待发图，不发送，截预览条用 |
+| `DS_SHOW_GALLERY=1` | 直接打开全屏图片流（3 张测试图） |
+| `DS_IMAGE_PROGRESS=1` | 显示一个假的压缩进度条，截进度态用 |
+| `DS_PRINT_SYSTEM=1` | 把拼好的 system 写到沙盒 `Documents/system-prompt.txt` |
+| `DS_MEMORY_STORE=1` | 整个数据库只用内存，截图演示不碰真实数据 |
+| `DS_UI_VARIANT=paper|floating|desk|cards` | 渲染 `Sources/Explore/` 里的方向存档首屏 |
 | `DS_EXPAND_THINKING=1` | 思考块默认展开（截展开态用） |
 | `DS_EXPAND_SEARCH=1` | 搜索结果默认展开 |
+
+浮岛骨架的整套验收图（空态 / 对话 / 历史 / 余额明细 / 设置 / 深色，双端各一套）：
+
+```bash
+./Scripts/preview-shots.sh
+```
 
 ```bash
 env SIMCTL_CHILD_DS_SHOW_SETTINGS=1 xcrun simctl launch <udid> com.ruakiu.ipadds
@@ -282,19 +322,300 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 
 提交 `46d01ff`。
 
+### 2026-11-24 · 第 8 轮：四个界面方向 → 定下浮岛 → 余额卡片
+
+**目标**：界面骨架还没定，先做几套能看的选择，再按选中的那套重构。
+
+**四个方向**（`Sources/Explore/`，`DS_UI_VARIANT` 切换）：
+
+| 代号 | 骨架 | 结论 |
+|---|---|---|
+| `paper` | 标签条 + 620 宋体正文 + 285 边注 | 读长文最好，iPad 信息位最全 |
+| `floating` | 单栏 660 + 悬浮输入 + 顺手历史 | **用户选中** |
+| `desk` | 232 / 528 / 272 三栏 + 本轮上下文与费用 | 信息量最大，用户判断「过重」 |
+| `cards` | 一轮一卡 + 左侧问题轴 | 适合回看与转发 |
+
+四套都拍了 iPad 与 iPhone 各一张，对比页在 `explore/compare.html`。
+
+**重构**：`RootView` 从 `NavigationSplitView` 换成单栏浮岛。
+
+- 顶栏三件套：历史按钮、会话标题（无会话时显示 DeepSeek）、新对话
+- 正文 660 居中，空态换成四张建议卡（点了填进输入框，不直接发）
+- 输入条常驻底部，上方两个模式胶囊；手机端右侧多一枚余额胶囊
+- 历史改成浮层：iPad 左侧 320 宽抽屉，iPhone 半屏 sheet；`HistoryItem` 与 SwiftData 解耦，演示数据也能喂
+- 深色模式全部走系统语义色，浮岛背景是深底渐变
+
+**余额卡片**（用户从 DSH 的侧栏卡片提的需求）：
+
+- `BalanceClient`：`GET https://api.deepseek.com/user/balance`，`Authorization: Bearer`，和聊天的 `x-api-key` 不是同一个头
+- `BalanceStore`：全局一份，启动、发送结束、手动点击时刷新；60 秒内不重复请求
+- iPad 左下角 150 宽卡片（金额 + 状态 + 刷新），手机端输入条右侧胶囊，点开明细弹层（总额 / 赠送 / 充值 / 刷新 / 去设置）
+- 低于 ¥20 转橙色并提示充值，错误态点击卡片直接进明细
+
+**踩坑**：
+
+1. `safeAreaInset(edge: .bottom)` 里的 `FloatingComposer` 只按 ideal 宽度布局，`.frame(maxWidth: 660)` 不生效，输入条挤到左下角、被余额卡压住。改成外层 `VStack` + 显式 `frame(maxWidth:)` 再居中。
+2. 历史浮层用 `.regularMaterial` 在白底上几乎透明，后面正文透出来。换成不透明 `systemBackground` + 阴影。
+3. `BalanceStore.note` 先判断 `hasKey` 会让 demo 快照显示「还没填 API Key」，改成先看有没有结果。
+
+**验证**：
+
+- 不带 demo 启动，能加载最近一条会话并渲染 → 真实路径通
+- 余额请求打到了真实接口，返回 401。本机用 curl 复核过：无 Key 与假 Key 都是 401，`/user/balance` 端点本身正确。**手上 Key 已失效，成功态没跑到**
+- 截图在 `shots/redesign/`，用 `./Scripts/preview-shots.sh` 重拍
+
+### 2026-11-24 · 第 9 轮：系统提示词与技能
+
+**目标**：让用户能固定一段全局 system，并把「技能」这种可复用指令存下来按需启用。
+
+**做了什么**：
+
+- `ChatClient.Options` 加 `systemPrompt`，请求体带 `system` 字段（Anthropic 格式允许字符串）
+- `PromptComposer`：默认提示词在前，启用的技能逐个拼成 `# 技能：名称` + 正文，中间用 `---` 分隔；全空时返回 nil，不发送 system
+- `StoredSkill`：SwiftData 模型（名称、说明、指令、启用、来源、时间戳）。加实体属于轻量迁移，实测旧会话全部保留
+- `SkillParser`：拆 YAML frontmatter 的 `name` / `description`，剩下的当正文；解析不到就退回文件名 + 全文。DSH 那套 `SKILL.md` 可以直接导入
+- 设置页新增「提示词」区块，两个入口都显示摘要（字数 / 已启用技能数），footer 报出拼好后的总字数
+- 技能页：新建、从 Markdown 导入（`fileImporter`，支持多选）、左滑启停、滑动删除；编辑页改名称/说明/指令，开关启用，底部删除
+
+**边界**：技能只提供指令，不执行脚本，也引用不到 App 读不到的文件。导入整份 DSH 技能时只有 `SKILL.md` 会进来，`references/` 里的东西不在包里。
+
+**验证**：
+
+- 编译通过；加实体后旧会话在启动时正常加载
+- 截图在 `shots/redesign/`（`*-prompt.png`、`*-skills.png`）
+- 导入与真实请求没有实测：headless 模拟器点不了文件选择器，手上也没有有效 Key
+
+**为了截图不污染真实数据**，加了 `DS_MEMORY_STORE=1`（整库只走内存）与 `DS_SEED_SKILLS=1`（空库里放两条示例技能）。
+
+### 2026-11-24 · 第 10 轮：功能验证，修掉一个一直在的流式 bug
+
+**这轮干的事**：把上一轮做的提示词、技能、余额和浮岛骨架都跑一遍，看能不能真用。
+
+**验证分三层**
+
+1. **离线自检**（`DS_SELFTEST=1`，32 条断言）：技能 frontmatter 解析、提示词组装（空、只有提示词、停用技能、顺序、空白指令）、请求体构造、余额解析（正常/美元/空列表/缺字段/非 JSON）、SwiftData 写盘后重开可读
+2. **本地 mock 服务**（`Scripts/mock-server.py` + `DS_API_BASE`）：抓完整请求体、回一段 SSE 流、回一份余额，验证请求 → 解析 → 渲染 → 落库 → 重启回读
+3. **真实设备行为**：启动加载最近会话、无 Key 的 401 错误态、低额警示色
+
+**发现并修掉的三个问题**
+
+| 问题 | 影响 | 修法 |
+|---|---|---|
+| `URLSession.AsyncBytes.lines` 会折叠连续换行，SSE 的空行被吃掉 | **流式解析从来没工作过**：请求 200、流读完、0 个事件，界面只剩用户气泡 | 改成按字节切行，保留空行 |
+| 思考块亚秒完成时显示「用时 0 秒」 | 本地 mock 下难看 | 不足 1 秒时只显示「已深度思考」 |
+| `DS_START_EMPTY=1` 提前 `return` 会跳过 `DS_AUTO_PROMPT` | 调试钩子互相打架 | 改成条件跳过加载会话，不再提前返回 |
+
+第一个是这一轮唯一的关键发现。它从第 5 轮就存在，因为一直没跑过真实流，所以每次都只看到「请求发出去了」，没有报错也没有内容。
+
+**验证数据**
+
+- 自检：32 passed / 0 failed
+- mock 请求体：`system` = 用户提示词 + `---` + `# 技能：中文技术写作`；停用的「代码审阅」确认没有进去
+- SSE：16 个事件全部还原（thinking 1 块、text 1 块、13 段 delta、message_delta、message_stop）
+- 落库：assistant 消息 `status=end_turn`，重启后会话标题与正文都在
+- 余额：mock 的 14.41 显示为 `¥14.41`，走的是低额橙色分支
+
+**没验证到**
+
+- 真实 Key：仍是 401，Keychain 里那把没换过
+- 文件选择器导入：headless 模拟器点不了 `fileImporter`
+
+**测试残留**：真实库里多了一条「链路验证：mock 落库」，在历史浮层左滑删掉即可。
+
+### 2026-11-24 · 第 11 轮：顶栏界限与思考强度
+
+**用户报的两个问题**
+
+1. 顶部标题与正文没有界限，滚动时文字穿过标题区，读起来乱
+2. 没有可调的思考强度
+
+**顶栏**
+
+原来的做法是浮层渐变背板（120pt，从 96% 白淡到透明）。标题落在渐变中段，遮罩只剩五六成不透明，正文直接透过来。
+
+改成 `.safeAreaInset(edge: .top)`：顶栏进入布局，内容被推到下方，滚不到标题区。顶栏自己用 `.ultraThinMaterial` 打底并延伸到状态栏，底部加 0.5pt 分隔线。滚动内容被裁在分隔线以下，界限清楚。
+
+顺带加了 `defaultScrollAnchor(.bottom)`：打开长会话直接停在最新消息，符合聊天习惯，也让「顶栏是否遮住内容」这件事在截图里可验证。
+
+**思考强度**
+
+查了文档，Anthropic 兼容格式里思考强度走 `output_config.effort`（low / high / max），`thinking` 只负责开关（`budget_tokens` 被忽略）。
+
+- `ThinkingEffort` 四档：关闭 / 低 / 标准 / 高，对应不发送 / low / high / max
+- 输入条的「深度思考」胶囊换成菜单：点开四档任选，胶囊直接显示当前档位
+- 设置页「思考」区块改成四段选择器，附映射说明
+- 请求体：`thinking: {type: enabled}` + `output_config: {effort: high}`
+
+**验证**
+
+- 自检 35 条全过（新增 3 条：强度进 `output_config`、关闭时不带 `output_config`、关闭时不带 `thinking`）
+- mock 抓包：`{"thinking": {"type": "enabled"}, "output_config": {"effort": "high"}}`
+- 截图：`shots/redesign/` 全部重拍
+
+### 2026-11-25 · 第 12 轮：历史浮层打开动画
+
+**问题**：iPad 的抽屉打开没有动画，瞬开。
+
+**根因**：`showHistory = true` 直接赋值，没有动画事务；`.animation(value:)` 挂在 `if` 分支内部，分支插入时修饰符本身还没生效，抓不到这次插入。
+
+**改法**：
+
+1. 打开与关闭都走 `withAnimation(drawerAnimation)`
+2. 抽屉常驻在视图树里（不靠 `if` 插入），由 `offset` 驱动：关闭时 `-360`（含阴影整个移出屏外），并关掉命中测试
+3. 遮罩跟着 `opacity` 从 0 到 0.26 同步淡入
+4. 曲线先用 `.easeOut(0.28)`，后来换成 `.spring(response: 0.30, dampingFraction: 0.86)`
+
+**为什么换 spring**：easeOut 的第一帧就是最高速，抽屉像被弹出来的。spring 起步有加速段：
+
+| 时间 | easeOut | spring |
+|---|---|---|
+| 16ms | 9.4% | 4.6% |
+| 50ms | 27.8% | 30.2% |
+| 100ms | 51.8% | 67.7% |
+| 200ms | 88.1% | 97.6% |
+| 280ms | 100% | 100.5% |
+
+前 30ms 更轻，中段更快，峰值 1.005（过冲 0.5%，肉眼不可见）。响应时间 0.30 是为了让总时长和原来的 0.28 接近，阻尼 0.86 把过冲压到不可见。
+
+**验证**：加了 `DS_SLOW_ANIM=1`（放慢到 4 秒）与 `DS_SHOW_HISTORY=1`（延迟 1.2 秒再打开），连拍能抓到中间帧。竖屏中间态存在 `shots/redesign/ipad-history-opening.png`：抽屉右边缘在 x≈72pt，遮罩刚起，位移和淡入都对。
+
+**行为影响**
+
+- 抽屉关闭后仍在视图树里（屏幕外），列表会继续跟随 `@Query` 更新，开销可忽略
+- iPhone 仍是系统 sheet，动画由系统负责
+
+### 2026-11-25 · 第 13 轮：两个内置技能
+
+**目标**：带两个开箱可用的技能，顺便把技能链路再验一遍。
+
+**内容**（`Sources/Core/Models/BuiltinSkills.swift`）：
+
+| 名称 | 作用 | 字数 |
+|---|---|---|
+| 结论先行 | 第一句给结论，依据最多三条 | 138 |
+| 术语注解 | 英文术语首次出现给中文对照 | 146 |
+
+**安装策略**
+
+- 首次启动装一次，版本号存在 `builtinSkillsVersion`
+- 用户删掉后不会自己回来；技能页右上角菜单有「恢复内置技能」
+- 列表里带「内置」灰徽章，和用户自建的条目区分开
+- 内存库模式（截图用）每次都装，不写版本号，免得把真实库的首次安装挡掉
+
+**验证**
+
+- mock 抓包：`system` 里两段 `# 技能：结论先行` / `# 技能：术语注解`，顺序与定义一致，前面是用户的默认提示词
+- 自检 40 条全过（新增 5 条：数量、名称唯一、指令长度、内置识别、自建不误判）
+- 截图：`shots/redesign/ipad-skills-builtin.png`
+
+**顺带清理**：删掉了 `DS_SEED_SKILLS` 那套演示 seed，截图改用真实的内置技能。
+
+### 2026-11-25 · 第 14 轮：技能改成按需启用
+
+**用户指出的问题**：内置技能装完就是 `isEnabled: true`，等于每次请求都全局注入。DSH 里技能是 `/` 显式调用或模型自行决定，不该常驻。
+
+**改动**
+
+1. 内置技能安装时 `isEnabled: false`
+2. 输入条加「技能」胶囊：点开列出所有技能，勾选即启用，再点取消；全停用时给「全部停用」
+3. 胶囊显示 `技能 · N`，启用时品牌蓝、停用时灰
+4. 技能状态只有一层——胶囊和设置页改的是同一个 `isEnabled`，不做"默认值 + 本次覆盖"两套状态
+
+**为什么不用 `/`**
+
+- iOS 键盘上打 `/` 要切到符号页，比点胶囊慢
+- 技能是持续状态（接下来几条都生效），不是单条消息的一次性命令
+- 胶囊能直接显示当前启用了几个，`/` 只在输入时可见
+
+**为什么不让模型自己决定**
+
+DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载技能"要多一次往返，还得把技能全文塞进工具定义里，成本和可控性都不划算。自用场景里用户自己选更快。
+
+**验证**（mock 抓包）
+
+| 状态 | system | 技能段 |
+|---|---|---|
+| 默认（都不启用） | 23 字符 | 无 |
+| 胶囊里勾选两个 | 343 字符 | `结论先行`、`术语注解` |
+
+**布局**：四个胶囊挤在 iPhone 一行里，第一版把「深度思考 · 标准」压成了三行。把文案缩成「思考 · 标准」、字号 12 → 11.5、内边距 11 → 8，并给每个胶囊加 `lineLimit(1)` + `fixedSize`，现在一行放得下。
+
+### 2026-11-25 · 第 15 轮：图片识别
+
+**协议**：Anthropic 格式的 `image` 块，`source.type = base64`、`media_type = image/jpeg`。文档写的是 `deepseek-flash` 支持、`deepseek-v4-pro` 会把图替换成 `[Unsupported Image]`。
+
+**实现**
+
+- `MessageImage`：压缩后的 JPEG + 尺寸，`blockJSON` 直接生成协议块，`decode(from:)` 从历史块还原
+- `ImagePipeline`：长边压到 1280、JPEG 0.75。服务端本来就会把图缩到约 1300×1300 再计费（单张上限 1024 token），客户端先压能省一半以上请求体；一张 960×640 的测试图压完 43 KB
+- `ChatViewModel.send` 加 `images` 参数，消息内容拼成 `[image..., text]`，空文字也能发；落库直接存这个块数组
+- `load` 时把历史里的 image 块解回 `MessageImage`，气泡照常显示
+- UI：输入条左侧加选图按钮（`PhotosPicker`，最多 4 张），选完进预览条（缩略图 + 删除 + 继续加），发送后显示在用户气泡上方
+- 模型是 `deepseek-v4-pro` 且有待发图时，预览条下方给一条橙色提示「不读取图片，发送前请切到 flash」
+
+**验证**
+
+- 自检新增 9 条：长边 ≤ 1280、输出 JPEG、体积 < 600KB、块结构（type/source/media_type/base64 非空）、解码回环、空数据不崩 → **49 条全过**
+- mock 抓包：请求 2 个块，`image` 块 base64 长度 57948，解码后 43460 字节，文件头 `ffd8ffe0`（JPEG）
+- 截图：`shots/redesign/ipad-image.png`（气泡）、`ipad-image-pending.png`（预览条）
+
+**没验证到的**
+
+- 真机的 `PhotosPicker` 选择流程：headless 模拟器点不了，代码走的是标准 API
+- 模型是否真能读图：需要有效 Key
+
+### 2026-11-25 · 第 16 轮：图片查看、压缩进度、图片流入口
+
+**三个功能**
+
+1. **全屏查看**：点气泡里的图进入全屏，左右滑动翻页，双击在 1x / 2.5x 之间切换，放大后可拖动（范围限制在图片边界内）
+2. **压缩进度**：选图后解码 + 缩放 + 编码放到后台线程，输入条上方显示「正在处理 1/3 张」
+3. **图片流入口**：顶栏在有图片的会话里多一个图片按钮，点开就是整个会话的图片，底部缩略图条可以直接跳转
+
+**踩的坑**
+
+- `TabView + .page` 放在 `fullScreenCover` 里会为页码指示器预留一段高度，图片只铺到 917pt（全屏 1032pt），底部留黑。换成 `ScrollView + scrollTargetBehavior(.paging) + scrollPosition(id:)`，高度自己说了算
+- `GeometryReader + ignoresSafeArea` 需要给子视图显式 `frame(width:height:)`，只写 `maxWidth: .infinity` 不生效
+- 缩略图条单独放 `ScrollView` 时宽度会被内容撑缩，必须由外层给定宽度
+
+**验证**
+
+- 全屏态：`shots/redesign/ipad-gallery.png`（图片全屏、X 在左上、`1 / 3`、底部三张缩略图）
+- 进度态：`shots/redesign/ipad-image-progress.png`
+- 发图后顶栏出现图片按钮：`shots/redesign/ipad-image.png`
+
+**没验证到的**：真机上的双击缩放、滑动翻页手感——headless 模拟器点不了，逻辑只在这里跑过。
+
+### 2026-11-25 · 第 17 轮：看图手势、保存与排序
+
+**三个功能**
+
+1. **下拉关闭**：全屏看图时向下拖，跟手位移、背景同步变淡；超过 140pt 或预测位移超过 320pt 松手就关，否则弹回。横向拖动不触发（比较横纵位移）
+2. **长按菜单**：全屏图上长按出「保存到相册」「复制图片」，操作完顶部短暂显示一行确认。保存需要 `NSPhotoLibraryAddUsageDescription`，已写进工程的 `INFOPLIST_KEY_*`
+3. **拖动排序**：待发图片长按拖动换位置，`onDrag` + `ImageCellDropDelegate`，拖动中的格子半透明，其他格子让位有 0.16s 动画
+
+**验证**
+
+- 构建通过，`Info.plist` 里确认有 `NSPhotoLibraryAddUsageDescription`
+- 全屏看图截图无回退
+- 三个手势都没有实测：headless 模拟器点不了、拖不动，逻辑只在代码层确认
+
+**实机**：补了 `docs/DEVICE.md`，从插线、信任、选 Team 到 7 天续签和常见报错都写了。
+
 ---
 
 ## 6. 下一步
 
 按优先级排，理由是不解决前两条，后面的工作会在错误的基础上返工。
 
-1. **真实流式验证**（阻塞中，需要 Key）—— 确认协议契约，见 §2.1
-2. **修历史回传**：`ChatClient` 解码时带出原始块 JSON，`ChatViewModel.history` 存原始数组。这是多轮正确性的前提。
-3. **SwiftData 持久化**：会话、消息落盘，侧栏换成真实数据，支持新建 / 切换 / 删除 / 重命名。
-4. **真实数据下的渲染修整**：`ContentBlock.grouped` 现在每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块可能几千字，展开会把正文顶出屏幕。这三处等真实数据出来再定改法。
-5. 图片与文档上传（`POST /files` 拿 `file_id`，注意 `purpose` 字段必须放在 `file` 之前）
-6. 语音（ASR / TTS）
-7. Mermaid、引用弹层验证、会话列表卡片化
+1. **换一把有效 Key，跑真实模型**（阻塞中，卡在 Key）—— 见 §2.1。
+2. **真机签名**（阻塞中，卡在 Apple ID）—— 模拟器验不了的引用弹层、横屏、键盘交互都要在真机上看。
+3. **真实数据下的渲染修整**：`ContentBlock.grouped` 每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块几千字展开会把正文顶出屏幕。
+4. **会话管理**：重命名、搜索。
+5. 图片上传（`deepseek-flash` 支持图像理解，走 `image` 内容块）
+6. 文档上传（`POST /files` 拿 `file_id`，注意 `purpose` 字段必须放在 `file` 之前）
+7. 语音（ASR / TTS）
+8. Mermaid
 
 ---
 
@@ -318,8 +639,12 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 | `docs/DEVELOPMENT.md` | 本文件。目标、进度、日志、下一步 |
 | `docs/TECH_PLAN.md` | 技术方案：环境、选型、内容块映射、数据模型、UI 结构、里程碑 |
 | `docs/BUILD_NOTES.md` | 环境坑：三个沙盒限制的解法、横屏为什么拍不到、构建命令 |
+| `docs/DEVICE.md` | 上真机：签名、信任设备、免费账号 7 天续签、常见报错 |
+| `docs/DESIGN.md` | 浮岛骨架的设计规范：颜色、字号、圆角、间距、组件与双端差异 |
 | `Scripts/build.sh` | 编译（已内置必需的 `TMPDIR` 环境变量） |
 | `Scripts/shot.sh` | 装 + 启动 + 截图 |
+| `Scripts/preview-shots.sh` | 浮岛骨架的全套验收图（空态/对话/历史/余额/设置/深色 × 双端） |
+| `explore/` | 四套界面方向的首屏、截图与对比页 |
 | `shots/` | 各阶段截图，文件名可读 |
 
 ## 9. 协作约定
@@ -327,5 +652,5 @@ ssh-add --apple-use-keychain ~/.ssh/id_ed25519
 - 改动重要文件前先说明方案，等确认
 - 每轮改动前备份原文件（`.build/project.pbxproj.bak` 就是这个用途）
 - 代码里 `TODO(...)` 标注的是有意的欠账，带里程碑编号
-- 视觉决策已定：向 DeepSeek 官方靠，克制、少装饰
+- 视觉决策已定：浮岛骨架，单栏、大留白、悬浮输入。规范见 `docs/DESIGN.md`，新页面照它做，不另起一套
 - **每轮有实质进展，在本文件 §5 追加一条日志，并更新文件头的「最后更新」日期**

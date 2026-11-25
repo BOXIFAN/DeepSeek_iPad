@@ -1,159 +1,654 @@
 import SwiftUI
 import SwiftData
+import PhotosUI
+import UniformTypeIdentifiers
 
+/// 浮岛骨架的根视图：对话即首页，历史收进浮层，左下角常驻余额卡片。
 struct RootView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.colorScheme) private var colorScheme
 
-    @State private var chatViewModel = ChatViewModel()
+    @State private var chat = ChatViewModel()
+    @State private var balance = BalanceStore.shared
     @State private var selectedID: UUID?
-    @State private var compactPath: [UUID] = []
+    @State private var showHistory = false
+    @State private var showSettings = ProcessInfo.processInfo.environment["DS_SHOW_SETTINGS"] == "1"
+    @State private var showBalanceSheet = ProcessInfo.processInfo.environment["DS_SHOW_BALANCE"] == "1"
+    @State private var draft = ""
+    @State private var pendingImages: [MessageImage] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotoPicker = false
+    @State private var imageProgress: (done: Int, total: Int)?
+    @State private var draggingImageID: UUID?
+    @State private var gallery: GalleryPresentation?
+    @State private var windowWidth: CGFloat = 0
+    @FocusState private var composerFocused: Bool
+
+    @AppStorage("model") private var model = "deepseek-flash"
+    @AppStorage("systemPrompt") private var systemPrompt = ""
+    @AppStorage(ThinkingEffort.storageKey) private var effortRaw = ThinkingEffort.standard.rawValue
+    @AppStorage("defaultSearch") private var search = false
 
     @Query(sort: \StoredConversation.updatedAt, order: .reverse)
     private var conversations: [StoredConversation]
 
+    @Query(sort: \StoredSkill.createdAt, order: .forward)
+    private var skills: [StoredSkill]
+
+    private var isRegular: Bool { sizeClass == .regular }
+    private var effort: ThinkingEffort { ThinkingEffort(rawValue: effortRaw) ?? .standard }
+    private var showsCornerBalance: Bool { isRegular && windowWidth >= 980 }
+
     var body: some View {
-        Group {
-            if sizeClass == .regular {
-                regularLayout
-            } else {
-                compactLayout
+        ZStack {
+            FloatingBackground()
+
+            VStack(spacing: 0) {
+                FloatingChatBody(
+                    viewModel: chat,
+                    onSuggestion: { suggestion in
+                        draft = suggestion
+                        composerFocused = true
+                    },
+                    onOpenSettings: { showSettings = true },
+                    onOpenImage: { images, index in
+                        gallery = GalleryPresentation(images: images, index: index)
+                    }
+                )
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    topBar
+                }
+                composerArea
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if showsCornerBalance {
+                BalanceCard(
+                    store: balance,
+                    onSettings: { showSettings = true },
+                    onDetails: { showBalanceSheet = true }
+                )
+                .padding(.leading, 22)
+                .padding(.bottom, 24)
+            }
+        }
+        .overlay { historyDrawer }
+        .sheet(isPresented: phoneHistoryBinding) { phoneHistorySheet }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
+        .fullScreenCover(item: $gallery) { presentation in
+            ImageGalleryView(images: presentation.images, initialIndex: presentation.index)
+        }
+        .sheet(isPresented: $showBalanceSheet) {
+            BalanceSheet(store: balance) {
+                showBalanceSheet = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showSettings = true
+                }
+            }
+        }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            windowWidth = width
+        }
+        .task { bootstrap() }
+        .photosPicker(
+            isPresented: $showPhotoPicker,
+            selection: $photoItems,
+            maxSelectionCount: ImagePipeline.maxCount,
+            matching: .images
+        )
+        .onChange(of: photoItems) { _, _ in
+            loadPickedImages()
+        }
+        .onChange(of: chat.isStreaming) { _, streaming in
+            if !streaming {
+                balance.refreshIfStale(within: 5)
             }
         }
         .tint(Theme.accent)
-        .task {
-            // 启动时打开最近一条会话
-            if let first = conversations.first, chatViewModel.currentConversation == nil {
-                selectedID = first.id
-                chatViewModel.load(first)
-            }
-        }
     }
 
-    // MARK: - iPad
+    // MARK: - 背景
 
-    private var regularLayout: some View {
-        NavigationSplitView {
-            ConversationSidebar(
-                conversations: conversations,
-                selection: $selectedID,
-                onNew: startNew,
-                onDelete: delete
+    private struct FloatingBackground: View {
+        @Environment(\.colorScheme) private var scheme
+
+        var body: some View {
+            LinearGradient(
+                colors: scheme == .dark
+                    ? [Color(red: 0.055, green: 0.059, blue: 0.078),
+                       Color(red: 0.024, green: 0.024, blue: 0.031),
+                       Color(red: 0.024, green: 0.024, blue: 0.031)]
+                    : [Color(red: 0.973, green: 0.976, blue: 1.0),
+                       .white,
+                       .white],
+                startPoint: .top,
+                endPoint: .center
             )
-            .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
-        } detail: {
-            NavigationStack {
-                ChatView(viewModel: chatViewModel)
+            .ignoresSafeArea()
+        }
+    }
+
+    // MARK: - 顶栏
+
+    private var topBar: some View {
+        HStack(spacing: 14) {
+            circleButton(icon: "line.3.horizontal", tint: Color.primary.opacity(0.75)) {
+                openHistory()
             }
-        }
-        .navigationSplitViewStyle(.balanced)
-        .onChange(of: selectedID) { _, newValue in
-            guard let newValue,
-                  let conversation = conversations.first(where: { $0.id == newValue }),
-                  conversation.id != chatViewModel.currentConversation?.id else { return }
-            chatViewModel.load(conversation)
-        }
-    }
+            .accessibilityLabel("会话历史")
 
-    // MARK: - iPhone
+            Spacer(minLength: 8)
 
-    private var compactLayout: some View {
-        NavigationStack(path: $compactPath) {
-            ConversationList(
-                conversations: conversations,
-                onSelect: { conversation in
-                    chatViewModel.load(conversation)
-                    compactPath = [conversation.id]
-                },
-                onNew: {
-                    startNew()
-                    compactPath = []
-                },
-                onDelete: delete
-            )
-            .navigationDestination(for: UUID.self) { _ in
-                ChatView(viewModel: chatViewModel)
-            }
-        }
-    }
+            VStack(spacing: 1) {
+                Text(headerTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
 
-    // MARK: - 动作
-
-    private func startNew() {
-        selectedID = nil
-        compactPath = []
-        chatViewModel.startNew()
-    }
-
-    private func delete(_ conversation: StoredConversation) {
-        if chatViewModel.currentConversation?.id == conversation.id {
-            chatViewModel.startNew()
-            selectedID = nil
-        }
-        ConversationStore.shared.delete(conversation)
-    }
-}
-
-/// 窄屏下的会话列表页。
-struct ConversationList: View {
-    var conversations: [StoredConversation]
-    var onSelect: (StoredConversation) -> Void
-    var onNew: () -> Void
-    var onDelete: (StoredConversation) -> Void
-
-    var body: some View {
-        List {
-            ForEach(conversations) { conversation in
-                Button {
-                    onSelect(conversation)
-                } label: {
-                    row(conversation)
-                }
-                .buttonStyle(.plain)
-                .swipeActions {
-                    Button(role: .destructive) {
-                        onDelete(conversation)
-                    } label: {
-                        Label("删除", systemImage: "trash")
-                    }
-                }
-            }
-            if conversations.isEmpty {
-                Text("还没有对话")
-                    .font(.footnote)
+                Text(headerSubtitle)
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .listRowSeparator(.hidden)
-                    .padding(.top, 40)
+                    .lineLimit(1)
             }
-        }
-        .listStyle(.plain)
-        .navigationTitle("对话")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: onNew) {
-                    Image(systemName: "square.and.pencil")
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 8) {
+                if !sessionImages.isEmpty {
+                    circleButton(icon: "photo.on.rectangle", tint: Color.primary.opacity(0.75)) {
+                        gallery = GalleryPresentation(images: sessionImages, index: 0)
+                    }
+                    .accessibilityLabel("查看对话里的 \(sessionImages.count) 张图")
+                }
+
+                circleButton(icon: "square.and.pencil", tint: Theme.accent) {
+                    startNew()
                 }
                 .accessibilityLabel("新建对话")
             }
         }
-    }
-
-    private func row(_ conversation: StoredConversation) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(conversation.title)
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
-            Text(preview(conversation))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        .padding(.horizontal, isRegular ? 26 : 18)
+        .padding(.top, isRegular ? 12 : 4)
+        .padding(.bottom, 8)
+        .background {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea(edges: .top)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.07))
+                .frame(height: 0.5)
+        }
     }
 
-    private func preview(_ conversation: StoredConversation) -> String {
-        conversation.sortedMessages.last?.plainText ?? "空对话"
+    private var circleFill: Color {
+        colorScheme == .dark
+            ? Color(uiColor: .secondarySystemBackground)
+            : Color(uiColor: .systemBackground)
+    }
+
+    /// 当前会话里的全部图片，按消息顺序。
+    private var sessionImages: [MessageImage] {
+        chat.messages.flatMap(\.images)
+    }
+
+    private var headerTitle: String {
+        if chat.messages.isEmpty { return "DeepSeek" }
+        if let generated = chat.generatedTitle, !generated.isEmpty {
+            return generated
+        }
+        return chat.conversationTitle
+    }
+
+    private var headerSubtitle: String {
+        var parts = [model]
+        if effort.isEnabled { parts.append("思考 · \(effort.title)") }
+        if search { parts.append("联网") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func circleButton(icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(tint)
+                .frame(width: 38, height: 38)
+                .background(
+                    Circle()
+                        .fill(circleFill)
+                        .shadow(color: .black.opacity(0.07), radius: 12, y: 5)
+                )
+                .overlay(
+                    Circle().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - 历史数据
+
+    private var historyItems: [HistoryItem] {
+        if ProcessInfo.processInfo.environment["DS_DEMO_HISTORY"] == "1" {
+            return Self.demoHistory
+        }
+        return conversations.map { conversation in
+            let preview = conversation.sortedMessages.last?.plainText ?? ""
+            return HistoryItem(
+                id: conversation.id,
+                title: conversation.title,
+                preview: preview,
+                updatedAt: conversation.updatedAt,
+                isCurrent: conversation.id == selectedID
+            )
+        }
+    }
+
+    private static var demoHistory: [HistoryItem] {
+        let now = Date()
+        let calendar = Calendar.current
+        func daysAgo(_ days: Int, hour: Int, minute: Int) -> Date {
+            let base = calendar.date(byAdding: .day, value: -days, to: now) ?? now
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) ?? base
+        }
+        return [
+            HistoryItem(id: UUID(), title: "DeepSeek 模型能力与价格",
+                        preview: "现在的主力是两个模型，deepseek-flash…",
+                        updatedAt: daysAgo(0, hour: 9, minute: 41), isCurrent: true),
+            HistoryItem(id: UUID(), title: "Swift 并发里的 actor 隔离",
+                        preview: "在 Swift 6 严格并发模式下，MainActor…",
+                        updatedAt: daysAgo(0, hour: 9, minute: 12)),
+            HistoryItem(id: UUID(), title: "把长文档拆成章节再总结",
+                        preview: "先按一级标题切分，每段单独总结，最后…",
+                        updatedAt: daysAgo(1, hour: 21, minute: 30)),
+            HistoryItem(id: UUID(), title: "SQLite 索引选择",
+                        preview: "复合索引的列顺序决定了能命中哪些查询…",
+                        updatedAt: daysAgo(1, hour: 15, minute: 4)),
+            HistoryItem(id: UUID(), title: "Keychain 存 API Key 的几种做法",
+                        preview: "kSecAttrAccessibleAfterFirstUnlock…",
+                        updatedAt: daysAgo(4, hour: 11, minute: 48)),
+        ]
+    }
+
+    // MARK: - 输入区
+
+    private var composerWidth: CGFloat? {
+        isRegular ? 640 : nil
+    }
+
+    private var composerArea: some View {
+        VStack(spacing: 9) {
+            HStack(spacing: 8) {
+                ThinkingEffortChip(effort: Binding(
+                    get: { effort },
+                    set: { effortRaw = $0.rawValue }
+                ))
+                FloatingModeChip(title: "联网搜索", icon: "globe.asia.australia", isOn: $search)
+                SkillPickerChip(skills: skills) { skill in
+                    toggleSkill(skill)
+                }
+                Spacer(minLength: 0)
+
+                if !isRegular {
+                    BalancePill(store: balance) {
+                        showBalanceSheet = true
+                    }
+                }
+            }
+            .frame(maxWidth: composerWidth)
+
+            if let progress = imageProgress {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(progress.done == progress.total
+                         ? "正在处理最后一张…"
+                         : "正在处理 \(progress.done)/\(progress.total) 张")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: composerWidth)
+            }
+
+            if !pendingImages.isEmpty {
+                pendingImageStrip
+                    .frame(maxWidth: composerWidth)
+            }
+
+            FloatingComposer(
+                text: $draft,
+                isStreaming: chat.isStreaming,
+                hasImages: !pendingImages.isEmpty,
+                focus: $composerFocused,
+                onSend: send,
+                onStop: chat.stop,
+                onPickImage: { showPhotoPicker = true }
+            )
+            .frame(maxWidth: composerWidth)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, isRegular ? 32 : 16)
+        .padding(.top, 6)
+        .padding(.bottom, isRegular ? 22 : 10)
+    }
+
+    // MARK: - 历史浮层
+
+    @ViewBuilder
+    private var historyDrawer: some View {
+        ZStack(alignment: .leading) {
+            if isRegular {
+                Color.black
+                    .opacity(showHistory ? 0.26 : 0)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(showHistory)
+                    .onTapGesture { closeHistory() }
+
+                HistoryPanel(
+                    items: historyItems,
+                    balance: balance,
+                    onSelect: { select($0) },
+                    onDelete: { delete($0) },
+                    onNew: { startNew() },
+                    onClose: { closeHistory() },
+                    onSettings: {
+                        closeHistory()
+                        showSettings = true
+                    }
+                )
+                .frame(width: 320)
+                .frame(maxHeight: .infinity)
+                .background(
+                    Color(uiColor: .systemBackground)
+                        .ignoresSafeArea()
+                        .shadow(color: .black.opacity(0.16), radius: 30, x: 10)
+                )
+                .offset(x: showHistory ? 0 : -360)
+                .allowsHitTesting(showHistory)
+            }
+        }
+        .animation(drawerAnimation, value: showHistory)
+    }
+
+    /// 待发送图片的预览条。
+    private var pendingImageStrip: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ForEach(pendingImages) { image in
+                    ZStack(alignment: .topTrailing) {
+                        if let ui = image.uiImage {
+                            Image(uiImage: ui)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 62, height: 62)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+                                )
+                        }
+
+                        Button {
+                            pendingImages.removeAll { $0.id == image.id }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(Color.black.opacity(0.55)))
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: 6, y: -6)
+                    }
+                    .onDrag {
+                        draggingImageID = image.id
+                        return NSItemProvider(object: image.id.uuidString as NSString)
+                    }
+                    .onDrop(
+                        of: [.text],
+                        delegate: ImageCellDropDelegate(
+                            target: image,
+                            items: $pendingImages,
+                            draggingID: $draggingImageID
+                        )
+                    )
+                    .opacity(draggingImageID == image.id ? 0.45 : 1)
+                }
+
+                if pendingImages.count < ImagePipeline.maxCount {
+                    Button {
+                        showPhotoPicker = true
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 62, height: 62)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(Color.primary.opacity(0.045))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if model == "deepseek-v4-pro" {
+                Label("deepseek-v4-pro 不读取图片，发送前请切到 flash", systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func loadPickedImages() {
+        guard !photoItems.isEmpty else { return }
+        let items = photoItems
+        photoItems = []
+        Task {
+            imageProgress = (0, items.count)
+            var loaded: [MessageImage] = []
+            for (offset, item) in items.enumerated() {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    // 解码 + 缩放 + 编码放到后台，10MB 的 HEIC 在主线程会卡一秒
+                    let image = await Task.detached(priority: .userInitiated) {
+                        ImagePipeline.make(from: data)
+                    }.value
+                    if let image {
+                        loaded.append(image)
+                    }
+                }
+                imageProgress = (offset + 1, items.count)
+            }
+            let room = max(0, ImagePipeline.maxCount - pendingImages.count)
+            pendingImages.append(contentsOf: loaded.prefix(room))
+            imageProgress = nil
+        }
+    }
+
+    /// 抽屉进出的曲线。用 spring 是为了开头有加速段，位移不会像 easeOut 那样一上来就满速。
+    /// `DS_SLOW_ANIM=1` 时整体放慢到约 4 秒，方便逐帧截图核对。
+    private var drawerAnimation: Animation {
+        let base = Animation.spring(response: 0.30, dampingFraction: 0.86)
+        let slow = ProcessInfo.processInfo.environment["DS_SLOW_ANIM"] == "1"
+        return slow ? base.speed(0.075) : base
+    }
+
+    private var phoneHistoryBinding: Binding<Bool> {
+        Binding(
+            get: { !isRegular && showHistory },
+            set: { showHistory = $0 }
+        )
+    }
+
+    private var phoneHistorySheet: some View {
+        HistoryPanel(
+            items: historyItems,
+            balance: balance,
+            onSelect: { select($0) },
+            onDelete: { delete($0) },
+            onNew: { startNew() },
+            onClose: { showHistory = false },
+            onSettings: {
+                showHistory = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showSettings = true
+                }
+            }
+        )
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    // MARK: - 动作
+
+    private func bootstrap() {
+        let environment = ProcessInfo.processInfo.environment
+
+        if environment["DS_SELFTEST"] == "1" {
+            SelfTest.writeReport()
+        }
+
+        if environment["DS_SHOW_HISTORY"] == "1" {
+            // 延迟一下再打开，录像/连续截图才有机会抓到抽屉进入的过程
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                openHistory()
+            }
+        }
+
+        SkillInstaller.installMissing()
+
+        if environment["DS_ENABLE_SKILLS"] == "1" {
+            let context = ConversationStore.shared.context
+            let stored = (try? context.fetch(FetchDescriptor<StoredSkill>())) ?? []
+            stored.forEach { $0.isEnabled = true }
+            try? context.save()
+        }
+
+        if environment["DS_PRINT_SYSTEM"] == "1" {
+            let stored = (try? ConversationStore.shared.context.fetch(FetchDescriptor<StoredSkill>())) ?? []
+            let assembled = PromptComposer.system(defaultPrompt: systemPrompt, skills: stored) ?? "<nil>"
+            // headless 模拟器拿不到 stdout，写到沙盒里方便脚本读
+            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("system-prompt.txt")
+            try? assembled.write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        if environment["DS_BALANCE_DEMO"] == "1" {
+            balance.applyDemoSnapshot()
+        } else {
+            balance.refreshIfStale(within: 5)
+        }
+
+        if environment["DS_DEMO_THREAD"] == "1" {
+            chat.loadDemoThread()
+            return
+        }
+        if environment["DS_START_EMPTY"] != "1",
+           let first = conversations.first,
+           chat.currentConversation == nil {
+            selectedID = first.id
+            chat.load(first)
+        }
+
+        // 调试钩子：启动即发一条，用来验端到端链路（配合 DS_API_BASE 指到本地 mock）
+        if environment["DS_SHOW_GALLERY"] == "1" {
+            let titles = ["ONE", "TWO", "THREE"]
+            let images = titles.enumerated().compactMap { offset, title in
+                SelfTest.makeDemoImage(text: "PICTURE \(title)", hue: CGFloat(offset) * 0.33)
+            }
+            if !images.isEmpty {
+                gallery = GalleryPresentation(images: images, index: 0)
+            }
+        }
+
+        if environment["DS_IMAGE_PROGRESS"] == "1" {
+            imageProgress = (1, 3)
+        }
+
+        if environment["DS_PENDING_IMAGE"] == "1",
+           let image = SelfTest.makeDemoImage() {
+            pendingImages = [image]
+        }
+
+        if let prompt = environment["DS_AUTO_PROMPT"],
+           !prompt.isEmpty,
+           chat.messages.isEmpty {
+            var images: [MessageImage] = []
+            if environment["DS_DEMO_IMAGE"] == "1",
+               let image = SelfTest.makeDemoImage() {
+                images = [image]
+            }
+            sendText(prompt, images: images)
+        }
+    }
+
+    private func send() {
+        let text = draft
+        let images = pendingImages
+        draft = ""
+        pendingImages = []
+        composerFocused = false
+        sendText(text, images: images)
+    }
+
+    private func sendText(_ text: String, images: [MessageImage] = []) {
+        let options = ChatClient.Options(
+            model: model,
+            thinking: effort.isEnabled,
+            thinkingEffort: effort.apiValue,
+            webSearch: search,
+            systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
+        )
+        chat.send(text, images: images, apiKey: KeychainStore.read() ?? "", options: options)
+    }
+
+    private func select(_ item: HistoryItem) {
+        guard let conversation = conversations.first(where: { $0.id == item.id }) else { return }
+        chat.load(conversation)
+        selectedID = conversation.id
+        closeHistory()
+        composerFocused = false
+    }
+
+    private func startNew() {
+        chat.startNew()
+        selectedID = nil
+        draft = ""
+        closeHistory()
+        composerFocused = true
+    }
+
+    private func toggleSkill(_ skill: StoredSkill) {
+        skill.isEnabled.toggle()
+        skill.updatedAt = Date()
+        try? ConversationStore.shared.context.save()
+    }
+
+    private func openHistory() {
+        withAnimation(drawerAnimation) {
+            showHistory = true
+        }
+    }
+
+    private func closeHistory() {
+        withAnimation(drawerAnimation) {
+            showHistory = false
+        }
+    }
+
+    private func delete(_ item: HistoryItem) {
+        guard let conversation = conversations.first(where: { $0.id == item.id }) else { return }
+        if chat.currentConversation?.id == conversation.id {
+            chat.startNew()
+            selectedID = nil
+        }
+        ConversationStore.shared.delete(conversation)
     }
 }

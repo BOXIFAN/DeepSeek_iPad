@@ -12,7 +12,7 @@ struct DSApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            ExploreRoot()
         }
         .modelContainer(ConversationStore.shared.container)
     }

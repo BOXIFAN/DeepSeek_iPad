@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek iOS · 四个界面方向</title>
+<style>
+  :root {
+    --ink: #101218;
+    --sub: #5c6270;
+    --faint: #8a90a0;
+    --line: #e7e9ee;
+    --accent: #4d6bfe;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; scroll-behavior: smooth; }
+  body {
+    margin: 0; background: #fff; color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+    font-size: 16px; line-height: 1.75;
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 0 40px; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 88px 0 44px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--faint); font-weight: 600;
+  }
+  .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--faint); }
+  h1 {
+    margin: 24px 0 0; font-size: clamp(40px, 5vw, 64px);
+    line-height: 1.1; letter-spacing: -.025em; font-weight: 700;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { margin: 24px 0 0; max-width: 660px; font-size: 17px; color: var(--sub); line-height: 1.8; }
+  .facts {
+    display: flex; flex-wrap: wrap; margin: 40px 0 0; padding: 0; list-style: none;
+    border-top: 1px solid var(--line);
+  }
+  .facts li { flex: 1 1 170px; padding: 16px 24px 16px 0; border-right: 1px solid var(--line); }
+  .facts li + li { padding-left: 24px; }
+  .facts li:last-child { border-right: 0; }
+  .facts b { display: block; font-size: 25px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .facts span { font-size: 12px; color: var(--faint); }
+
+  /* ---------- toc ---------- */
+  .toc {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; gap: 8px; flex-wrap: wrap;
+    margin: 0 -40px; padding: 14px 40px;
+    background: rgba(255, 255, 255, .94);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .toc a {
+    display: inline-flex; align-items: baseline; gap: 7px;
+    padding: 7px 14px; border-radius: 100px; border: 1px solid var(--line);
+    text-decoration: none; color: var(--ink); font-size: 13.5px; font-weight: 500;
+    transition: background .15s, border-color .15s;
+  }
+  .toc a:hover { background: #f7f8fa; border-color: #d9dce4; }
+  .toc a b { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .toc a span { color: var(--faint); font-size: 12px; }
+
+  /* ---------- direction ---------- */
+  .dir { padding: 56px 0 60px; border-top: 1px solid var(--line); }
+  .dir-head { display: flex; align-items: flex-start; gap: 20px; }
+  .idx {
+    font-size: 13px; font-weight: 650; color: var(--tint);
+    font-variant-numeric: tabular-nums; letter-spacing: .06em;
+    padding-top: 13px; min-width: 28px;
+  }
+  .head-main { flex: 1 1 auto; min-width: 0; }
+  .dir-title { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  h2 { margin: 0; font-size: 32px; letter-spacing: -.015em; line-height: 1.3; font-weight: 700; }
+  .tag {
+    margin: 0; font-size: 12.5px; font-weight: 600;
+    color: var(--tint); background: var(--tint-soft);
+    padding: 4px 12px; border-radius: 100px;
+  }
+  .one-liner { margin: 10px 0 0; color: var(--sub); font-size: 16px; max-width: 660px; }
+
+  .palette { display: flex; gap: 6px; padding-top: 8px; }
+  .palette div { text-align: left; }
+  .palette i {
+    display: block; width: 30px; height: 30px; border-radius: 8px;
+    border: 1px solid rgba(16, 18, 24, .1);
+  }
+  .palette b {
+    display: block; margin-top: 5px; font-size: 8.5px; font-weight: 500;
+    color: var(--faint); letter-spacing: .02em; font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- shots ---------- */
+  .shots {
+    display: grid; grid-template-columns: minmax(0, 1fr) 246px;
+    gap: 22px; align-items: start;
+    max-width: 990px; margin-top: 28px;
+  }
+  figure { margin: 0; }
+  figure img {
+    display: block; width: 100%; height: auto; border-radius: 16px;
+    border: 1px solid #dcdfe6;
+    box-shadow: 0 18px 44px rgba(16, 18, 24, .13), 0 2px 6px rgba(16, 18, 24, .06);
+    background: #fff;
+  }
+  figcaption { margin-top: 9px; font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  /* ---------- notes ---------- */
+  .notes {
+    display: grid; grid-template-columns: 1.05fr 1fr 1fr; gap: 36px;
+    margin-top: 34px; padding-top: 26px; border-top: 1px solid var(--line);
+  }
+  .notes h3 {
+    margin: 0 0 10px; font-size: 10.5px; letter-spacing: .15em; text-transform: uppercase;
+    color: var(--faint); font-weight: 650;
+  }
+  .notes p { margin: 0 0 14px; font-size: 14px; color: #2c313c; line-height: 1.78; }
+  .notes p:last-child { margin-bottom: 0; }
+
+  .skel { display: flex; gap: 4px; height: 44px; margin-bottom: 14px; }
+  .skel i {
+    display: flex; align-items: center; justify-content: center;
+    background: #f0f2f6; border-radius: 5px; font-style: normal;
+    font-size: 10.5px; color: #6b7280; letter-spacing: .02em; white-space: nowrap;
+    overflow: hidden;
+  }
+  .skel i.main { background: var(--tint-soft); color: var(--tint); font-weight: 600; }
+
+  .pair { display: grid; grid-template-columns: 8px 1fr; gap: 9px; margin-bottom: 14px; }
+  .pair:last-child { margin-bottom: 0; }
+  .pair .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 9px; }
+  .pair.good .dot { background: #17a06a; }
+  .pair.cost .dot { background: #e0a11c; }
+  .pair p { margin: 0; font-size: 14px; color: var(--sub); line-height: 1.75; }
+
+  .device-note {
+    margin-top: 16px; padding: 12px 14px; background: #f7f8fa; border-radius: 9px;
+    font-size: 12.5px; color: var(--sub); line-height: 1.7;
+  }
+  .device-note strong { color: var(--ink); font-weight: 600; }
+
+  /* ---------- verdict ---------- */
+  .verdict { padding: 64px 0 88px; border-top: 1px solid var(--line); display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 48px; }
+  .verdict h2 { font-size: 28px; }
+  .pick {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 16px; padding: 8px 15px; border-radius: 100px;
+    background: var(--ink); color: #fff; font-size: 13px; font-weight: 600;
+  }
+  .verdict p { margin: 0 0 16px; color: #2c313c; font-size: 15px; line-height: 1.85; }
+  .rules { margin: 24px 0 0; padding: 0; list-style: none; }
+  .rules li {
+    display: grid; grid-template-columns: 120px 1fr; gap: 16px;
+    padding: 13px 0; border-top: 1px solid var(--line);
+    font-size: 14px; color: var(--sub); line-height: 1.75;
+  }
+  .rules b { color: var(--ink); font-weight: 600; }
+  .foot {
+    border-top: 1px solid var(--line); padding: 24px 0 56px;
+    font-size: 12px; color: var(--faint);
+    display: flex; justify-content: space-between; gap: 24px; flex-wrap: wrap;
+  }
+
+
+  /* ---------- matrix ---------- */
+  .matrix-wrap { padding: 56px 0 60px; border-top: 1px solid var(--line); }
+  .matrix-wrap h2 { font-size: 28px; margin: 0 0 6px; }
+  .matrix-wrap .sub { margin: 0 0 26px; color: var(--sub); font-size: 15px; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.matrix th, table.matrix td { text-align: left; padding: 13px 12px; border-bottom: 1px solid var(--line); }
+  table.matrix col.hi { background: #f7f9ff; }
+  table.matrix thead th { font-size: 12px; letter-spacing: .04em; color: var(--faint); font-weight: 600; border-bottom: 1px solid #d8dbe3; }
+  table.matrix tbody th { font-weight: 500; color: #2c313c; width: 34%; }
+  table.matrix td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .dots { letter-spacing: 2px; font-size: 13px; color: #4d6bfe; }
+  .dots i { font-style: normal; color: #dfe2ea; }
+  .matrix tr.hi th, .matrix tr.hi td { background: #fafbff; }
+  .legend { margin-top: 14px; font-size: 12px; color: var(--faint); }
+
+  @media (max-width: 1020px) {
+    .wrap { padding: 0 22px; }
+    .toc { margin: 0 -22px; padding: 12px 22px; }
+    .hero { padding: 52px 0 30px; }
+    .shots { grid-template-columns: minmax(0, 1fr) 132px; gap: 14px; }
+    .notes { grid-template-columns: 1fr; gap: 24px; }
+    .palette { display: none; }
+    .verdict { grid-template-columns: 1fr; gap: 22px; }
+    .dir { padding: 40px 0 44px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <span class="eyebrow">DeepSeek for iPad &amp; iPhone</span>
+    <h1>四条走法，<br>同一段<em>对话</em>。</h1>
+    <p class="lede">
+      四套骨架都跑在模拟器里，用同一段回答拍下来：里面有深度思考、两次检索、一张价格表和一个代码块。
+      设备和字号一致，差别只在结构、信息密度和阅读节奏。挑一个，我把它接到已经写好的流式接口上。
+    </p>
+    <ul class="facts">
+      <li><b>4</b><span>界面方向</span></li>
+      <li><b>2</b><span>设备 · iPad Pro 13 / iPhone 16 Pro</span></li>
+      <li><b>1</b><span>段真实回答，内容未改</span></li>
+      <li><b>0</b><span>处占位图或假数据</span></li>
+    </ul>
+  </header>
+
+  <nav class="toc">
+    <a href="#paper"><b>01</b> 墨纸 <span>研究阅读台</span></a>
+    <a href="#floating"><b>02</b> 浮岛 <span>极简对话</span></a>
+    <a href="#desk"><b>03</b> 台面 <span>工作台</span></a>
+    <a href="#cards"><b>04</b> 卡片 <span>对话卡片流</span></a>
+    <a href="#verdict">我的推荐 <span>→</span></a>
+  </nav>
+
+  <!-- 01 -->
+  <section class="dir" id="paper" style="--tint:#253E38; --tint-soft:#EAEFE9;">
+    <div class="dir-head">
+      <span class="idx">01</span>
+      <div class="head-main">
+        <div class="dir-title"><h2>墨纸</h2><p class="tag">研究阅读台</p></div>
+        <p class="one-liner">中文长答案用宋体排，右侧常驻一条边注：谁说的、花了多久、数字是几。</p>
+      </div>
+      <div class="palette">
+        <div><i style="background:#FBF8F2"></i><b>FBF8F2</b></div>
+        <div><i style="background:#253E38"></i><b>253E38</b></div>
+        <div><i style="background:#1B1A17"></i><b>1B1A17</b></div>
+        <div><i style="background:#E0DBD0"></i><b>E0DBD0</b></div>
+      </div>
+    </div>
+
+    <div class="shots">
+      <figure>
+        <img src="shots/web/ipad-paper.png" alt="墨纸方向 iPad 截图">
+        <figcaption>iPad Pro 13 · 竖屏 1032 × 1376 pt</figcaption>
+      </figure>
+      <figure>
+        <img src="shots/web/iphone-paper.png" alt="墨纸方向 iPhone 截图">
+        <figcaption>iPhone 16 Pro</figcaption>
+      </figure>
+    </div>
+
+    <div class="notes">
+      <div>
+        <h3>骨架</h3>
+        <div class="skel">
+          <i style="flex:0 0 24%">标签条</i>
+          <i class="main" style="flex:1 1 54%">正文 620</i>
+          <i style="flex:0 0 21%">边注 285</i>
+        </div>
+        <p>顶部会话标签条替掉侧栏，正文 620 居中，右侧 285 的边注常驻：模型、耗时、来源编号、关键数字，加一颗「整理成笔记」。</p>
+      </div>
+      <div>
+        <h3>顺手的</h3>
+        <div class="pair good"><span class="dot"></span><p>中文长文最舒服的一组字号与行距；引用角标和来源编号不用离开正文；标签条让切会话只要一次点击。</p></div>
+      </div>
+      <div>
+        <h3>要付的代价</h3>
+        <div class="pair cost"><span class="dot"></span><p>边注在 iPhone 上没有位置，来源只能挪到回答末尾；宋体不适合代码和表格，要和无衬线混排；会话管理只能收进标签条的溢出菜单。</p></div>
+        <div class="device-note"><strong>iPhone 上：</strong>边注消失，标题栏变成返回＋标题＋分享，正文仍是宋体。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 -->
+  <section class="dir" id="floating" style="--tint:#3D50C9; --tint-soft:#EEF1FF;">
+    <div class="dir-head">
+      <span class="idx">02</span>
+      <div class="head-main">
+        <div class="dir-title"><h2>浮岛</h2><p class="tag">极简对话</p></div>
+        <p class="one-liner">没有侧栏，没有分隔线。历史是浮层，输入框是一块浮起来的白色圆角。</p>
+      </div>
+      <div class="palette">
+        <div><i style="background:#F8F9FF"></i><b>F8F9FF</b></div>
+        <div><i style="background:#4D6BFE"></i><b>4D6BFE</b></div>
+        <div><i style="background:#EDEEF7"></i><b>EDEEF7</b></div>
+        <div><i style="background:#FFFFFF"></i><b>FFFFFF</b></div>
+      </div>
+    </div>
+
+    <div class="shots">
+      <figure>
+        <img src="shots/web/ipad-floating.png" alt="浮岛方向 iPad 截图">
+        <figcaption>iPad Pro 13 · 竖屏 1032 × 1376 pt</figcaption>
+      </figure>
+      <figure>
+        <img src="shots/web/iphone-floating.png" alt="浮岛方向 iPhone 截图">
+        <figcaption>iPhone 16 Pro</figcaption>
+      </figure>
+    </div>
+
+    <div class="notes">
+      <div>
+        <h3>骨架</h3>
+        <div class="skel">
+          <i style="flex:1 1 15%"></i>
+          <i class="main" style="flex:0 1 62%">正文 660</i>
+          <i style="flex:1 1 15%"></i>
+        </div>
+        <p>正文 660 居中，全屏只有一张纸。左上角一颗按钮拉出半屏历史浮层，底部输入条悬浮在白底上，深度思考与联网搜索是两颗胶囊。</p>
+      </div>
+      <div>
+        <h3>顺手的</h3>
+        <div class="pair good"><span class="dot"></span><p>注意力只在答案上；iPad 和 iPhone 观感几乎一致；代码量最少，之后加功能最快。</p></div>
+      </div>
+      <div>
+        <h3>要付的代价</h3>
+        <div class="pair cost"><span class="dot"></span><p>iPad 两边各空出 180pt，大屏没被用起来；切会话要两步；没有成本、上下文、来源这类信息位，想加得另找地方。</p></div>
+        <div class="device-note"><strong>iPhone 上：</strong>几乎不用变，左右边距从 32 收到 16，正文字号不动。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 03 -->
+  <section class="dir" id="desk" style="--tint:#2F45C8; --tint-soft:#EDF0F9;">
+    <div class="dir-head">
+      <span class="idx">03</span>
+      <div class="head-main">
+        <div class="dir-title"><h2>台面</h2><p class="tag">工作台</p></div>
+        <p class="one-liner">左栏会话与项目，中栏对话，右栏这一轮花了多少、来源在哪、上下文还剩多少。</p>
+      </div>
+      <div class="palette">
+        <div><i style="background:#F2F3F5"></i><b>F2F3F5</b></div>
+        <div><i style="background:#4D6BFE"></i><b>4D6BFE</b></div>
+        <div><i style="background:#E9ECF1"></i><b>E9ECF1</b></div>
+        <div><i style="background:#219E6A"></i><b>219E6A</b></div>
+      </div>
+    </div>
+
+    <div class="shots">
+      <figure>
+        <img src="shots/web/ipad-desk.png" alt="台面方向 iPad 截图">
+        <figcaption>iPad Pro 13 · 竖屏 1032 × 1376 pt</figcaption>
+      </figure>
+      <figure>
+        <img src="shots/web/iphone-desk.png" alt="台面方向 iPhone 截图">
+        <figcaption>iPhone 16 Pro</figcaption>
+      </figure>
+    </div>
+
+    <div class="notes">
+      <div>
+        <h3>骨架</h3>
+        <div class="skel">
+          <i style="flex:0 0 22%">会话</i>
+          <i class="main" style="flex:1 1 51%">对话 528</i>
+          <i style="flex:0 0 26%">上下文 272</i>
+        </div>
+        <p>三栏 232 / 528 / 272。左栏按今天、昨天、项目分组；右栏是这一轮的真实数字：13 秒思考、2 次工具调用、12.4k 上下文、0.0147 元、三个来源。</p>
+      </div>
+      <div>
+        <h3>顺手的</h3>
+        <div class="pair good"><span class="dot"></span><p>iPad 的信息利用率最高；费用、上下文占用、工具调用都在当场；左栏的项目分组适合长期积累。</p></div>
+      </div>
+      <div>
+        <h3>要付的代价</h3>
+        <div class="pair cost"><span class="dot"></span><p>正文只有 528pt，宽表格和长代码会挤；iPhone 上右栏压成三个指标 chips，一半信息被砍；实现量最大。</p></div>
+        <div class="device-note"><strong>iPhone 上：</strong>右栏折叠成顶部一行指标 chips，左栏收进返回栈，底部加四格 tab bar。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 -->
+  <section class="dir" id="cards" style="--tint:#3A3F52; --tint-soft:#F0F1F6;">
+    <div class="dir-head">
+      <span class="idx">04</span>
+      <div class="head-main">
+        <div class="dir-title"><h2>卡片</h2><p class="tag">对话卡片流</p></div>
+        <p class="one-liner">一轮问答一张卡。卡片头是问题，脚是检索状态和操作，左边一条问题轴负责跳转。</p>
+      </div>
+      <div class="palette">
+        <div><i style="background:#F4F4F7"></i><b>F4F4F7</b></div>
+        <div><i style="background:#FFFFFF"></i><b>FFFFFF</b></div>
+        <div><i style="background:#4D6BFE"></i><b>4D6BFE</b></div>
+        <div><i style="background:#F0F1F6"></i><b>F0F1F6</b></div>
+      </div>
+    </div>
+
+    <div class="shots">
+      <figure>
+        <img src="shots/web/ipad-cards.png" alt="卡片方向 iPad 截图">
+        <figcaption>iPad Pro 13 · 竖屏 1032 × 1376 pt</figcaption>
+      </figure>
+      <figure>
+        <img src="shots/web/iphone-cards.png" alt="卡片方向 iPhone 截图">
+        <figcaption>iPhone 16 Pro</figcaption>
+      </figure>
+    </div>
+
+    <div class="notes">
+      <div>
+        <h3>骨架</h3>
+        <div class="skel">
+          <i style="flex:0 0 20%">问题轴</i>
+          <i class="main" style="flex:1 1 64%">卡片 700</i>
+          <i style="flex:1 1 13%"></i>
+        </div>
+        <p>灰底上浮着 700 宽的卡片，圆角 20，头尾各一条细线。左侧 208 是问题轴，当前这一轮标成蓝色，底部是导出与「只看结论」。</p>
+      </div>
+      <div>
+        <h3>顺手的</h3>
+        <div class="pair good"><span class="dot"></span><p>每一轮有固定的头、脚和操作位置，回看不用找；跳转靠左轴；卡片本身适合截图或转成笔记分享。</p></div>
+      </div>
+      <div>
+        <h3>要付的代价</h3>
+        <div class="pair cost"><span class="dot"></span><p>长答案一屏还是装不下，卡片会被内容撑得很长；两轮以上，iPhone 顶部的问题胶囊会挤成横滑；边框把连续阅读切成一段一段。</p></div>
+        <div class="device-note"><strong>iPhone 上：</strong>左侧问题轴变成顶部两枚 Q1／Q2 胶囊，卡片外边距从 24 收到 14。</div>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- matrix -->
+  <section class="matrix-wrap">
+    <h2>放在一起看</h2>
+    <p class="sub">五个维度的直观点数。最后一行的「实现量」点越多越省事。</p>
+    <table class="matrix">
+      <colgroup><col><col><col><col class="hi"><col></colgroup>
+      <thead>
+        <tr><th>维度</th><th>01 墨纸</th><th>02 浮岛</th><th class="hi">03 台面</th><th>04 卡片</th></tr>
+      </thead>
+      <tbody>
+        <tr><th>iPad 大屏利用</th><td><span class="dots">●●●●<i>●</i></span></td><td><span class="dots">●●<i>●</i><i>●</i><i>●</i></span></td><td><span class="dots">●●●●●</span></td><td><span class="dots">●●●●<i>●</i></span></td></tr>
+        <tr><th>中文长文阅读</th><td><span class="dots">●●●●●</span></td><td><span class="dots">●●●●<i>●</i></span></td><td><span class="dots">●●●<i>●</i><i>●</i></span></td><td><span class="dots">●●●<i>●</i><i>●</i></span></td></tr>
+        <tr><th>成本与上下文可见</th><td><span class="dots">●●●●<i>●</i></span></td><td><span class="dots">●<i>●</i><i>●</i><i>●</i><i>●</i></span></td><td><span class="dots">●●●●●</span></td><td><span class="dots">●●●<i>●</i><i>●</i></span></td></tr>
+        <tr><th>会话切换效率</th><td><span class="dots">●●●●<i>●</i></span></td><td><span class="dots">●●<i>●</i><i>●</i><i>●</i></span></td><td><span class="dots">●●●●●</span></td><td><span class="dots">●●●<i>●</i><i>●</i></span></td></tr>
+        <tr><th>实现量（点越多越省事）</th><td><span class="dots">●●<i>●</i><i>●</i><i>●</i></span></td><td><span class="dots">●●●●●</span></td><td><span class="dots">●<i>●</i><i>●</i><i>●</i><i>●</i></span></td><td><span class="dots">●●●<i>●</i><i>●</i></span></td></tr>
+      </tbody>
+    </table>
+    <p class="legend">点数是相对判断，不是评分：同一行里比较才有意义。</p>
+  </section>
+
+  <!-- verdict -->
+  <section class="verdict" id="verdict">
+    <div>
+      <h2>我的推荐</h2>
+      <div class="pick">03 · 台面</div>
+    </div>
+    <div>
+      <p>
+        这台客户端是你自己在用，iPad 是主力设备，一天里真正会重复的动作是切会话、看它调了几次搜索、这条回答花了多少。台面把这些放在不需要跳转的位置，528pt 的正文也被截图验证过：三列表格、代码块、中文正文都不挤。
+      </p>
+      <p>
+        代价是 iPhone 版本会损失右栏一半的信息。这部分本来就属于「在 iPad 上查看」的内容，收成三个指标 chips 不算勉强。
+      </p>
+      <ul class="rules">
+        <li><b>更常读长答案</b><span>选墨纸。宋体加边注对中文长文的友好度明显高一档，代价是排印工作要细致，其他界面元素也得跟着换字重。</span></li>
+        <li><b>只想要最省事的</b><span>选浮岛。它现在就能用，后面加功能不会被骨架限制，只是 iPad 的大屏会一直空着两边。</span></li>
+        <li><b>两样都想要</b><span>可以拼：拿墨纸的正文字和边注，配台面的左栏与右栏。我先出拼合后的一张首屏给你确认，再往下做。</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>截图来自本机 iOS 27.2 模拟器 · iPad Pro 13 M4 与 iPhone 16 Pro · 同一段对话内容</span>
+    <span>四个方向都可用 DS_UI_VARIANT 环境变量在 App 内直接切换</span>
+  </div>
+
+</div>
+</body>
+</html>

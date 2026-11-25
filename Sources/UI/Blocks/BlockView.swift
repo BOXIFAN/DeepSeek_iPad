@@ -64,10 +64,10 @@ struct ThinkingBlockView: View {
     }
 
     private var title: String {
-        if let duration {
-            return "已深度思考（用时 \(Int(duration)) 秒）"
-        }
-        return "深度思考"
+        guard let duration else { return "深度思考" }
+        // 本地 mock 或极快返回时会是亚秒级，别显示「用时 0 秒」
+        guard duration >= 1 else { return "已深度思考" }
+        return "已深度思考（用时 \(Int(duration.rounded())) 秒）"
     }
 }
 

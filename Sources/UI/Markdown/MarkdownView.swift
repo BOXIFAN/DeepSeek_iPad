@@ -7,8 +7,29 @@ import SwiftUI
 struct MarkdownView: View {
     let text: String
     var citations: [Citation] = []
+    /// 衬线排印（墨纸方向用）。
+    var serif: Bool = false
+    /// 正文磅值，nil 走系统 body。
+    var bodySize: CGFloat? = nil
+    /// 代码块与表格底色，nil 走系统灰。
+    var surface: Color? = nil
 
     @State private var activeCitation: Citation?
+
+    private var bodyFont: Font {
+        if serif {
+            return .custom("Songti SC", size: bodySize ?? 17)
+        }
+        if let bodySize {
+            return .system(size: bodySize)
+        }
+        return .body
+    }
+
+    private var bodyLineSpacing: CGFloat {
+        if serif { return bodySize.map { $0 * 0.55 } ?? 9 }
+        return 3
+    }
 
     var body: some View {
         let blocks = MarkdownParser.parse(text)
@@ -39,27 +60,27 @@ struct MarkdownView: View {
         case .heading(let level, let text):
             Text(inline(text))
                 .font(headingFont(level))
-                .fontWeight(level <= 2 ? .semibold : .medium)
+                .fontWeight(serif ? .bold : (level <= 2 ? .semibold : .medium))
                 .padding(.top, level <= 2 ? 6 : 2)
 
         case .paragraph(let text):
             Text(inline(text))
-                .font(.body)
-                .lineSpacing(3)
+                .font(bodyFont)
+                .lineSpacing(bodyLineSpacing)
                 .textSelection(.enabled)
 
         case .code(let language, let code):
-            CodeBlockView(language: language, code: code)
+            CodeBlockView(language: language, code: code, surface: surface)
 
         case .table(let headers, let rows):
-            MarkdownTable(headers: headers, rows: rows)
+            MarkdownTable(headers: headers, rows: rows, surface: surface)
 
         case .bullets(let items):
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("•").foregroundStyle(.secondary)
-                        Text(inline(item)).font(.body).lineSpacing(3)
+                        Text(inline(item)).font(bodyFont).lineSpacing(bodyLineSpacing)
                     }
                 }
             }
@@ -69,9 +90,9 @@ struct MarkdownView: View {
                 ForEach(Array(items.enumerated()), id: \.offset) { offset, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("\(offset + 1).")
-                            .font(.body.monospacedDigit())
+                            .font(bodyFont.monospacedDigit())
                             .foregroundStyle(.secondary)
-                        Text(inline(item)).font(.body).lineSpacing(3)
+                        Text(inline(item)).font(bodyFont).lineSpacing(bodyLineSpacing)
                     }
                 }
             }
@@ -82,7 +103,7 @@ struct MarkdownView: View {
                     .fill(Color.secondary.opacity(0.28))
                     .frame(width: 3)
                 Text(inline(text))
-                    .font(.body)
+                    .font(bodyFont)
                     .foregroundStyle(.secondary)
             }
 
@@ -92,6 +113,14 @@ struct MarkdownView: View {
     }
 
     private func headingFont(_ level: Int) -> Font {
+        if serif {
+            switch level {
+            case 1: return .custom("Songti SC", size: 24)
+            case 2: return .custom("Songti SC", size: 20)
+            case 3: return .custom("Songti SC", size: 18)
+            default: return .custom("Songti SC", size: 16)
+            }
+        }
         switch level {
         case 1: return .title2
         case 2: return .title3
@@ -137,6 +166,7 @@ struct MarkdownView: View {
 struct CodeBlockView: View {
     let language: String?
     let code: String
+    var surface: Color? = nil
 
     @State private var copied = false
 
@@ -174,11 +204,11 @@ struct CodeBlockView: View {
                     .padding(12)
             }
         }
-        .background(Color(uiColor: .secondarySystemBackground))
+        .background(surface ?? Color(uiColor: .secondarySystemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+                .strokeBorder(Color.primary.opacity(surface == nil ? 0.06 : 0.10), lineWidth: 1)
         )
     }
 }
@@ -188,6 +218,7 @@ struct CodeBlockView: View {
 struct MarkdownTable: View {
     let headers: [String]
     let rows: [[String]]
+    var surface: Color? = nil
 
     var body: some View {
         if headers.count > 4 {
@@ -213,7 +244,7 @@ struct MarkdownTable: View {
                     cell(header, isHeader: true)
                 }
             }
-            .background(Color(uiColor: .tertiarySystemBackground))
+            .background(headerSurface)
 
             ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
                 Divider()
@@ -222,11 +253,19 @@ struct MarkdownTable: View {
                         cell(text, isHeader: false)
                     }
                 }
-                .background(rowIndex.isMultiple(of: 2)
-                            ? Color.clear
-                            : Color(uiColor: .tertiarySystemBackground).opacity(0.45))
+                .background(rowIndex.isMultiple(of: 2) ? Color.clear : stripeSurface)
             }
         }
+    }
+
+    private var headerSurface: Color {
+        if let surface { return surface.opacity(0.85) }
+        return Color(uiColor: .tertiarySystemBackground)
+    }
+
+    private var stripeSurface: Color {
+        if let surface { return surface.opacity(0.45) }
+        return Color(uiColor: .tertiarySystemBackground).opacity(0.45)
     }
 
     private func cell(_ text: String, isHeader: Bool) -> some View {

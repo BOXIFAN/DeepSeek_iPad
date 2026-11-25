@@ -10,8 +10,10 @@ final class ConversationStore {
     let container: ModelContainer
 
     private init() {
-        let schema = Schema([StoredConversation.self, StoredMessage.self])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let schema = Schema([StoredConversation.self, StoredMessage.self, StoredSkill.self])
+        // DS_MEMORY_STORE=1 时整个库只在内存里，截图演示不污染真实数据
+        let inMemory = ProcessInfo.processInfo.environment["DS_MEMORY_STORE"] == "1"
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: inMemory)
         do {
             container = try ModelContainer(for: schema, configurations: [config])
         } catch {

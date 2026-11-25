@@ -15,6 +15,8 @@ final class ChatViewModel {
         var role: Role
         /// 用户消息的正文
         var text: String
+        /// 用户消息带的图片
+        var images: [MessageImage] = []
         /// 助手消息的内容块
         var blocks: [ContentBlock]
         var isStreaming = false
@@ -74,9 +76,11 @@ final class ChatViewModel {
 
         messages = conversation.sortedMessages.map { stored in
             if stored.role == "user" {
+                let images = stored.rawBlocks.compactMap(MessageImage.decode(from:))
                 return DisplayMessage(id: stored.id.uuidString,
                                       role: .user,
                                       text: stored.plainText,
+                                      images: images,
                                       blocks: [])
             }
             return DisplayMessage(id: stored.id.uuidString,
@@ -93,15 +97,46 @@ final class ChatViewModel {
         }
     }
 
+    /// 调试钩子：`DS_DEMO_THREAD=1` 时灌入一段示例对话，供命令行截图核对排版。
+    /// 只在启动时调用，不写库。
+    func loadDemoThread() {
+        task?.cancel()
+        task = nil
+        isStreaming = false
+        history = []
+        blockTemplates = [:]
+        blockSignatures = [:]
+        errorText = nil
+        currentConversation = nil
+        generatedTitle = "DeepSeek 模型能力与价格"
+        conversationTitle = "DeepSeek 模型能力与价格"
+        messages = [
+            DisplayMessage(id: "demo-user-1",
+                           role: .user,
+                           text: SampleData.userQuestion,
+                           blocks: []),
+            DisplayMessage(id: "demo-assistant-1",
+                           role: .assistant,
+                           text: "",
+                           blocks: SampleData.assistantBlocks)
+        ]
+    }
+
     // MARK: - 发送
 
-    func send(_ raw: String, apiKey: String, options: ChatClient.Options) {
+    func send(_ raw: String, images: [MessageImage] = [], apiKey: String, options: ChatClient.Options) {
         guard !isStreaming else { return }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !images.isEmpty else { return }
         guard !apiKey.isEmpty else {
             errorText = "还没填 API Key，先去设置里填一下"
             return
+        }
+
+        // 图片在前、文字在后，模型先看图再读问题
+        var content: [[String: Any]] = images.map(\.blockJSON)
+        if !text.isEmpty {
+            content.append(["type": "text", "text": text])
         }
 
         if currentConversation == nil {
@@ -110,18 +145,23 @@ final class ChatViewModel {
         if let conversation = currentConversation {
             // 首条用户消息顺便定标题，落库后重启才不会退回「新对话」
             let isFirstMessage = conversation.messages.isEmpty
+            let fallbackTitle = images.isEmpty ? String(text.prefix(24)) : "图片 · \(images.count) 张"
             store.append(to: conversation,
                          role: "user",
-                         blocks: [["type": "text", "text": text]],
+                         blocks: content,
                          plainText: text,
-                         autoTitle: isFirstMessage ? String(text.prefix(24)) : nil)
+                         autoTitle: isFirstMessage ? fallbackTitle : nil)
             conversationTitle = conversation.title
         }
 
-        messages.append(DisplayMessage(id: UUID().uuidString, role: .user, text: text, blocks: []))
+        messages.append(DisplayMessage(id: UUID().uuidString,
+                                       role: .user,
+                                       text: text,
+                                       images: images,
+                                       blocks: []))
         history.append([
             "role": "user",
-            "content": [["type": "text", "text": text]]
+            "content": content
         ])
 
         let assistantID = UUID().uuidString

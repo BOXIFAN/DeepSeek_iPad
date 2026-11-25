@@ -87,7 +87,7 @@ enum ChatError: LocalizedError {
 /// 直连 DeepSeek 的 Anthropic 兼容接口，走 SSE 流式。
 final class ChatClient {
 
-    private let endpoint = URL(string: "https://api.deepseek.com/anthropic/v1/messages")!
+    private let endpoint: URL
     private let session: URLSession
 
     init() {
@@ -97,14 +97,59 @@ final class ChatClient {
         config.timeoutIntervalForResource = 900
         config.waitsForConnectivity = true
         session = URLSession(configuration: config)
+        endpoint = Self.endpoint()
+    }
+
+    /// `DS_API_BASE` 可以把请求指到本地 mock，验证用；默认走官方地址。
+    static func endpoint() -> URL {
+        if let base = ProcessInfo.processInfo.environment["DS_API_BASE"],
+           !base.isEmpty,
+           let url = URL(string: base.trimmingCharacters(in: .whitespaces)) {
+            return url.appendingPathComponent("anthropic/v1/messages")
+        }
+        return URL(string: "https://api.deepseek.com/anthropic/v1/messages")!
+    }
+
+    /// 请求体构造单独拎出来，方便自检和 mock 对拍。
+    static func makeBody(messages: [[String: Any]], options: Options) -> [String: Any] {
+        var body: [String: Any] = [
+            "model": options.model,
+            "stream": true,
+            "max_tokens": options.maxTokens,
+            "messages": messages
+        ]
+        if options.thinking {
+            body["thinking"] = ["type": "enabled"]
+            if let effort = options.thinkingEffort {
+                body["output_config"] = ["effort": effort]
+            }
+        }
+        if options.generateTitle {
+            body["title"] = ["enabled": true]
+        }
+        if let systemPrompt = options.systemPrompt,
+           !systemPrompt.isEmpty {
+            body["system"] = systemPrompt
+        }
+        if options.webSearch {
+            body["tools"] = [
+                ["type": "deepseek_web_search", "name": "deepseek_web_search"],
+                ["type": "deepseek_read_url", "name": "deepseek_read_url"]
+            ]
+        }
+        return body
     }
 
     struct Options {
         var model = "deepseek-flash"
         var thinking = true
+        /// 思考强度，对应请求体的 `output_config.effort`；nil 表示不发送（关闭思考）
+        var thinkingEffort: String? = nil
         var webSearch = false
         var generateTitle = false
         var maxTokens = 8192
+        /// 默认系统提示词 + 已启用技能拼好的内容，nil 表示不发送 system
+        var systemPrompt: String? = nil
     }
 
     /// - Parameter messages: 已经组装好的协议消息数组，`content` 保持原始块结构。
@@ -115,24 +160,7 @@ final class ChatClient {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    var body: [String: Any] = [
-                        "model": options.model,
-                        "stream": true,
-                        "max_tokens": options.maxTokens,
-                        "messages": messages
-                    ]
-                    if options.thinking {
-                        body["thinking"] = ["type": "enabled"]
-                    }
-                    if options.generateTitle {
-                        body["title"] = ["enabled": true]
-                    }
-                    if options.webSearch {
-                        body["tools"] = [
-                            ["type": "deepseek_web_search", "name": "deepseek_web_search"],
-                            ["type": "deepseek_read_url", "name": "deepseek_read_url"]
-                        ]
-                    }
+                    let body = Self.makeBody(messages: messages, options: options)
 
                     var request = URLRequest(url: endpoint)
                     request.httpMethod = "POST"
@@ -151,14 +179,33 @@ final class ChatClient {
                         throw ChatError.http(http.statusCode, Self.extractMessage(from: text))
                     }
 
+                    // 不能直接用 bytes.lines：它会把连续换行折叠，空行丢了 SSE 就永远攒不齐
+                    // 一个事件。自己按字节切行，保留空行。
                     var parser = SSEParser()
-                    for try await rawLine in bytes.lines {
-                        if Task.isCancelled { break }
-                        let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
-                        guard let sse = parser.consume(line) else { continue }
+                    var lineBytes: [UInt8] = []
+                    var started = false
+
+                    func handle(_ line: String) {
+                        guard let sse = parser.consume(line) else { return }
                         for event in Self.decode(sse) {
                             continuation.yield(event)
                         }
+                    }
+
+                    for try await byte in bytes {
+                        if Task.isCancelled { break }
+                        if byte == 0x0A {
+                            var line = String(decoding: lineBytes, as: UTF8.self)
+                            if line.hasSuffix("\r") { line.removeLast() }
+                            lineBytes.removeAll(keepingCapacity: true)
+                            started = true
+                            handle(line)
+                        } else {
+                            lineBytes.append(byte)
+                        }
+                    }
+                    if started, !lineBytes.isEmpty {
+                        handle(String(decoding: lineBytes, as: UTF8.self))
                     }
                     continuation.finish()
                 } catch is CancellationError {
