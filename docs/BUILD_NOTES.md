@@ -65,7 +65,7 @@ xcrun simctl io <udid> screenshot out.png
 
 pbxproj 手写，用 `PBXFileSystemSynchronizedRootGroup` 指向 `Sources` 目录。在 `Sources/` 下新增 `.swift` 文件会被自动纳入编译，不需要改工程文件。
 
-根目录的 `project.yml` 是 XcodeGen 配置，当前**没有使用**：brew 安装因 `/opt/homebrew/Cellar` 权限失败，GitHub 直连下载 release 超时。保留它作为工程结构的声明，等网络条件允许时可用 `xcodegen generate` 重建工程。
+根目录曾经有一份 `project.yml`（XcodeGen 配置），但它从没被用上——brew 安装因 `/opt/homebrew/Cellar` 权限失败，GitHub 直连下载 release 超时。第 18 轮清理时已删除，`project.pbxproj` 是唯一的工程来源。
 
 ## 横屏截图：headless 模拟器做不到
 

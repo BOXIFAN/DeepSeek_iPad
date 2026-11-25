@@ -46,13 +46,6 @@ final class ConversationStore {
         save()
     }
 
-    func deleteAll() {
-        for conversation in all() {
-            context.delete(conversation)
-        }
-        save()
-    }
-
     /// 追加一条消息并维护会话的更新时间与标题。
     @discardableResult
     func append(to conversation: StoredConversation,
@@ -78,13 +71,6 @@ final class ConversationStore {
 
         save()
         return message
-    }
-
-    func rename(_ conversation: StoredConversation, to title: String) {
-        conversation.title = title
-        conversation.titleIsManual = true
-        conversation.updatedAt = Date()
-        save()
     }
 
     func save() {

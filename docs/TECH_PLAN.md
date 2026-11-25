@@ -1,4 +1,7 @@
-# iPad-DS 技术方案
+# iPad-DS 技术方案（立项稿）
+
+> ⚠️ **这份是 2026-11-24 立项时写的方案，实现已经大幅偏离**：工程改用 XcodeGen 之外的方案、界面换成浮岛骨架、协议与内容块映射也有调整。
+> **现状一律以 [DEVELOPMENT.md](DEVELOPMENT.md) 为准**，这里只留作「当初怎么想的」参考。
 
 > 目标：用 Swift 原生写一个 iPhone/iPad 通用的 DeepSeek 客户端，通过官方 API 复现官方 App 的对话体验。
 > 范围：自用。API Key 存本机 Keychain，客户端直连 `api.deepseek.com`，不做后端。

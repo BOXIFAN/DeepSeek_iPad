@@ -87,13 +87,6 @@ enum ContentBlock: Identifiable, Sendable {
         case .text(let id, _, _): return id
         }
     }
-
-    var isToolRelated: Bool {
-        switch self {
-        case .toolCall, .searchResults, .fetchedPage: return true
-        default: return false
-        }
-    }
 }
 
 // MARK: - 渲染块

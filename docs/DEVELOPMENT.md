@@ -51,7 +51,6 @@
 | 会话持久化 | ✅ 完成 | SwiftData，消息以原始协议块 JSON 存储，重启不丢 |
 | 会话列表真实数据 | ✅ 完成 | `@Query` 驱动，按更新时间倒序，浮层里滑动删除 |
 | API 余额查询 | ✅ 完成 · Key 无效未跑到成功态 | `GET /user/balance`；iPad 左下角卡片、iPhone 输入条右侧胶囊、明细弹层 |
-| 界面方向探索 | ✅ 完成 | `Sources/Explore/` 留了四套首屏存档，`DS_UI_VARIANT` 切换，对比页 `explore/compare.html` |
 | 新会话 / 切换会话 | ✅ 完成 | 新建、点选切换、滑动删除 |
 | 图片识别 | ✅ 完成 · 已验请求体 | 输入条选图（最多 4 张）、预览删除、气泡展示；压到 1280 长边 JPEG 0.75 后走 `image` 块 |
 | 文档上传（PDF/DOCX） | ❌ 未开始 | |
@@ -123,7 +122,6 @@ KeychainStore          API Key
 | `UI/Markdown/MarkdownParser.swift` | 块级 Markdown 解析 | 212 |
 | `UI/Markdown/SyntaxHighlighter.swift` | 正则语法高亮 | 86 |
 | `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 17 |
-| `Sources/Explore/*` | 四个方向的首屏存档，`DS_UI_VARIANT` 切换 | 2002 |
 
 ### 三个必须知道的决策
 
@@ -133,7 +131,7 @@ KeychainStore          API Key
 
 > 第 7 轮已按这条修完：`ChatClient` 解码时带出 `content_block_start` 的原始 JSON，`ChatViewModel` 用模板骨架 + 最终文本还原，`signature_delta` 单独累积后写回。现在历史里存的是原始块数组。
 
-**工程文件手写**（`iPadDS.xcodeproj/project.pbxproj`，objectVersion 77）。用 `PBXFileSystemSynchronizedRootGroup` 指向 `Sources`，所以**新增 `.swift` 文件不用改工程文件**，放进目录就会被编译。根目录的 `project.yml` 是 XcodeGen 配置，当前没在用（brew 装不上、GitHub 直连超时）。
+**工程文件手写**（`iPadDS.xcodeproj/project.pbxproj`，objectVersion 77）。用 `PBXFileSystemSynchronizedRootGroup` 指向 `Sources`，所以**新增 `.swift` 文件不用改工程文件**，放进目录就会被编译。根目录的 `project.yml` 已在第 18 轮删除：XcodeGen 始终没装上，`pbxproj` 是唯一工程来源。
 
 ---
 
@@ -174,7 +172,6 @@ KeychainStore          API Key
 | `DS_IMAGE_PROGRESS=1` | 显示一个假的压缩进度条，截进度态用 |
 | `DS_PRINT_SYSTEM=1` | 把拼好的 system 写到沙盒 `Documents/system-prompt.txt` |
 | `DS_MEMORY_STORE=1` | 整个数据库只用内存，截图演示不碰真实数据 |
-| `DS_UI_VARIANT=paper|floating|desk|cards` | 渲染 `Sources/Explore/` 里的方向存档首屏 |
 | `DS_EXPAND_THINKING=1` | 思考块默认展开（截展开态用） |
 | `DS_EXPAND_SEARCH=1` | 搜索结果默认展开 |
 
@@ -601,6 +598,35 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 - 三个手势都没有实测：headless 模拟器点不了、拖不动，逻辑只在代码层确认
 
 **实机**：补了 `docs/DEVICE.md`，从插线、信任、选 Team 到 7 天续签和常见报错都写了。
+
+### 2026-11-25 · 第 18 轮：清理
+
+**删了什么**
+
+| 目标 | 体积 | 理由 |
+|---|---|---|
+| `Sources/Explore/` | 80 KB / 2002 行 | 四套界面方向的首屏存档，正式版只用浮岛 |
+| `explore/` | 11 MB | 方向对比页与过程截图 |
+| `Scripts/explore-shots.sh` | 4 KB | 只为上面那套存档服务 |
+| `shots/*.png` 11 张 | 4 MB | 旧界面截图，已被 `shots/redesign/` 取代 |
+| `project.yml` | 4 KB | XcodeGen 配置，从没装上过 |
+| `.tools/` | 0 B | 空目录 |
+
+**死代码**
+
+- `Theme.contentMaxWidth` / `userBubble` / `blockSpacing`：浮岛改用固定尺寸后没人用了
+- `ContentBlock.isToolRelated`：没有调用方
+- `ConversationStore.rename` / `deleteAll`：没有入口（重命名功能还没做）
+
+入口从 `ExploreRoot()` 改回 `RootView()`。
+
+**验证**
+
+- 构建通过，自检 49 条全过
+- 界面截图无回退（`/tmp/after-clean.png` 与清理前一致）
+- 工作区从 42 MB 降到 27 MB，代码从 5612 行降到 3610 行（不含 Explore）
+
+**注**：第 5、6 轮日志里引用的 `shots/ipad-*.png` 随这次清理删除，那几处路径不再有效；`TECH_PLAN.md` 顶部已标为立项方案，现状以本文件为准。
 
 ---
 
