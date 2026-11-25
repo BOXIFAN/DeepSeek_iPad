@@ -145,7 +145,9 @@ message_stop
 4. 空的 `thinking` 块会出现（模型先搜索再思考），渲染层要能处理空块。
 5. 流中可能有 `: keep-alive` 注释行，忽略。
 6. 出错时 HTTP 仍是 200，流尾部是 `error` 事件且**没有** `message_delta`/`message_stop`。解析器必须能识别这种"正常结束之外"的终止。
-7. `usage` 以最终 `message_delta` 为准，`message_start` 里的只是第一步。
+7. `usage` 分两段到：`message_start` 给 `input_tokens` 与缓存字段，`message_delta` 给最终 `output_tokens`。两段都要，缺一段算不出上下文占用——第 19 轮据此把 `StreamEvent.messageStart` 改成带 `model` 与 `usage`，并加了 `Usage.merged(with:)`。
+   - 口径：按 Anthropic 语义，总输入 = `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`；如果兼容层透传 DeepSeek 原生字段，看到 `prompt_cache_hit_tokens` 就说明 `prompt_tokens` 已含命中量，改用 `inputIncludesCache` 分支，别把命中加两遍。
+   - 派生：会话上下文占用 = 最近一轮的总输入 + 输出；缓存命中率 = 命中 / 总输入；速度 = 输出 token ÷ 首个 token 到结束的耗时。
 
 初始版本先不做搜索，把 1/2/5/6 打通；联网进里程碑 3。
 

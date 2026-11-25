@@ -7,15 +7,19 @@ struct BalanceCard: View {
     var onSettings: () -> Void
     var onDetails: () -> Void
 
-    private var isWarning: Bool {
-        !store.hasKey || store.errorText != nil || store.isLow
+    /// 只有「没填 Key」和「余额偏低」把金额标橙。一次网络失败不该把已有数字也染成警告色。
+    private var amountWarning: Bool {
+        !store.hasKey || store.isLow
+    }
+
+    private var hasError: Bool {
+        store.hasKey && store.errorText != nil
     }
 
     var body: some View {
         Button {
-            if store.errorText != nil {
-                onDetails()
-            } else if store.hasKey {
+            // 出错时轻点就是重试，不用再点进明细里找按钮
+            if store.hasKey {
                 store.refresh()
             } else {
                 onSettings()
@@ -34,22 +38,23 @@ struct BalanceCard: View {
                         ProgressView()
                             .controlSize(.mini)
                     } else {
-                        Image(systemName: store.hasKey ? "arrow.clockwise" : "key")
+                        Image(systemName: hasError ? "exclamationmark.arrow.circlepath"
+                                                   : (store.hasKey ? "arrow.clockwise" : "key"))
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(hasError ? Color.orange : Color.secondary)
                     }
                 }
 
                 Text(store.amountText)
                     .font(.system(size: 21, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                    .foregroundStyle(isWarning ? Color.orange : Color.primary)
+                    .foregroundStyle(amountWarning ? Color.orange : Color.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
 
                 Text(store.note)
                     .font(.system(size: 9.5))
-                    .foregroundStyle(isWarning ? Color.orange : Color.secondary)
+                    .foregroundStyle(hasError || amountWarning ? Color.orange : Color.secondary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -86,7 +91,7 @@ struct BalancePill: View {
         Button(action: action) {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(store.isLow || !store.hasKey ? Color.orange : Color.green)
+                    .fill(store.isLow || !store.hasKey || store.errorText != nil ? Color.orange : Color.green)
                     .frame(width: 5, height: 5)
 
                 Text(store.amountText)
@@ -204,5 +209,6 @@ struct BalanceSheet: View {
         .padding(22)
         .presentationDetents([.height(300)])
         .presentationDragIndicator(.visible)
+        .presentationBackground(Color(uiColor: .systemBackground))
     }
 }

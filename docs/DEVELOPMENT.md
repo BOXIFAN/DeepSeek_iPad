@@ -2,7 +2,7 @@
 
 > 这是本项目的入口文档。新对话接手时**先读这一份**，再用 `docs/TECH_PLAN.md` 查方案细节、`docs/BUILD_NOTES.md` 查环境坑。
 >
-> 最后更新：2026-11-24
+> 最后更新：2026-11-25
 
 ---
 
@@ -25,7 +25,7 @@
 
 ## 2. 当前状态
 
-一句话：**界面已按浮岛骨架重建，流式与持久化链路都在；手上没有有效 Key，真实请求只验证到 401。**
+一句话：**界面已按浮岛骨架重建，流式、持久化、余额与用量统计都在；实机已跑通，第 19 轮修了余额卡片的刷新调度，并加了剩余上下文 / 缓存命中 / tok/s 三项指标。**
 
 ### 功能矩阵
 
@@ -37,8 +37,8 @@
 | 语法高亮 | ✅ 完成 | Swift / Python / JS / TS / JSON / Bash，正则四类着色 |
 | 深色模式 | ✅ 完成 | 跟随系统 |
 | API Key 存储 | ✅ 完成 | Keychain，`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
-| SSE 流式解析 | ✅ 代码完成，未真实验证 | 见 §2.1 |
-| 请求构造与错误映射 | ✅ 代码完成，未真实验证 | 401/402/429/400 有中文提示 |
+| SSE 流式解析 | ✅ 已验证 | mock 与实机都跑过；按字节切行保留空行，第 10 轮修复 |
+| 请求构造与错误映射 | ✅ 已验证 | 401/402/429/400 有中文提示 |
 | 发送 / 停止 | ✅ 完成 | 流式中发送键变停止键 |
 | 设置页 | ✅ 完成 | Key、默认模型、两个默认开关、系统提示词、技能 |
 | 系统提示词 | ✅ 完成 | 设置里一段全局 system，随每次请求发送 |
@@ -50,22 +50,25 @@
 | 落库与重启回读 | ✅ 已验证 | mock 回复落库，重启后会话与内容都在 |
 | 会话持久化 | ✅ 完成 | SwiftData，消息以原始协议块 JSON 存储，重启不丢 |
 | 会话列表真实数据 | ✅ 完成 | `@Query` 驱动，按更新时间倒序，浮层里滑动删除 |
-| API 余额查询 | ✅ 完成 · Key 无效未跑到成功态 | `GET /user/balance`；iPad 左下角卡片、iPhone 输入条右侧胶囊、明细弹层 |
+| API 余额查询 | ✅ 完成 · 实机已验证 | `GET /user/balance`；iPad 左下角卡片、iPhone 输入条右侧胶囊、明细弹层 |
+| 余额刷新调度 | ✅ 完成 · mock 验证 | 失败退避重试（5/15/45/120 秒）、回前台补刷、网络恢复补刷、3 分钟周期；失败保留旧值不泛橙 |
+| 会话用量 | ✅ 完成 · mock 验证 | 剩余上下文 / 缓存命中 / tok/s，输入条下方一行；点击看明细；随消息落库，切换会话能恢复 |
 | 新会话 / 切换会话 | ✅ 完成 | 新建、点选切换、滑动删除 |
 | 图片识别 | ✅ 完成 · 已验请求体 | 输入条选图（最多 4 张）、预览删除、气泡展示；压到 1280 长边 JPEG 0.75 后走 `image` 块 |
 | 文档上传（PDF/DOCX） | ❌ 未开始 | |
 | 语音输入 / 朗读 | ❌ 未开始 | |
 | Mermaid 图表 | ❌ 未开始 | 计划 `WKWebView` + 本地 js |
 | 引用角标弹层 | ⚠️ 代码已写，未验证 | 模拟器点不了，需要真机或 UI 测试 |
-| 真机签名 | ⚠️ 步骤已写，未实操 | `docs/DEVICE.md`：Xcode 选 Team + ⌘R，免费账号 7 天有效 |
+| 真机签名 | ✅ 已完成 | 已装真机并实机测试；步骤见 `docs/DEVICE.md`，免费账号 7 天有效 |
 
-### 2.1 传输链路已验证，缺一次真实请求
+### 2.1 传输链路已验证（mock + 实机），usage 字段待对真值
 
-第 10 轮用本地 mock 把整条链路跑通了：请求体、SSE 解析（16 个事件）、渲染、落库、重启回读都验过。剩下的是确认官方返回和 mock 的差异，重点看三件事：
+第 10 轮用本地 mock 把整条链路跑通：请求体、SSE 解析（16 个事件）、渲染、落库、重启回读。第 19 轮之前用户实机确认「基本可用」，真实请求、流式、余额都已跑过。继续对官方返回的重点是四件事：
 
 1. 官方 `content_block_start` 里 `server_tool_use` 的 `input` 结构和 `kind` 字段，是否和 mock 假设的一致。
 2. 联网搜索时 `web_search_tool_result` 的 `encrypted_content` / `signature` 能否原样回传（第 7 轮实现的，没跑过真的）。
 3. `message_delta` 里的 `title` 字段（会话标题）是否真的会来。
+4. **usage 的真实口径**：`/anthropic/v1/messages` 的 `input_tokens` 按 Anthropic 语义应只算未命中部分，DeepSeek 原生 `prompt_tokens` 却含命中量。`Usage.inputIncludesCache` 两种都接：看到 `prompt_cache_hit_tokens` 才按原生口径合并。实机跑一轮后核对「本轮输入」是否等于上下文规模，偏差大就说明兼容层用了另一套。
 
 验证方法：把 Key 存到 `.secrets/api-key`（已在 `.gitignore` 里），然后
 
@@ -98,30 +101,35 @@ KeychainStore          API Key
 | 路径 | 职责 | 行数 |
 |---|---|---|
 | `Sources/App/DSApp.swift` | 入口，调试钩子注入 Key | 19 |
-| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区排布 | 403 |
-| `Core/Models/ContentBlock.swift` | 协议块模型 + `RenderBlock` 分组 | 173 |
+| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区与用量条排布 | 677 |
+| `Core/Models/ContentBlock.swift` | 协议块模型 + `RenderBlock` 分组 | 166 |
 | `Core/Models/ContentBlock+Decode.swift` | 块字段解码 | 109 |
+| `Core/Models/ModelCatalog.swift` | 模型上下文窗口表 | 31 |
+| `Core/Models/SessionMetrics.swift` | 会话用量（剩余上下文 / 缓存命中 / 速度）与格式化 | 102 |
 | `Core/Models/SampleData.swift` | 预览与截图用的样例回复 | 145 |
 | `Core/Models/StoredSkill.swift` | 技能模型、Markdown frontmatter 解析、system 组装 | 119 |
-| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、错误映射 | 264 |
+| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、usage 解析、错误映射 | 388 |
 | `Core/Network/SSEParser.swift` | 按行攒事件 | 54 |
-| `Core/Network/BalanceClient.swift` | 余额查询（`Bearer` 鉴权，和聊天不是同一个头） | 115 |
+| `Core/Network/BalanceClient.swift` | 余额查询（`Bearer` 鉴权）、网络错误分类 | 153 |
 | `Core/Storage/KeychainStore.swift` | Key 存取 | 61 |
-| `Core/Storage/ConversationStore.swift` | 会话增删查改 | 96 |
-| `Core/Storage/StoredModels.swift` | SwiftData 模型 | 72 |
-| `Core/Storage/BalanceStore.swift` | 余额状态、请求节流、低额判断 | 107 |
-| `Features/Chat/ChatViewModel.swift` | 流式状态机 | 332 |
-| `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条、模式胶囊 | 322 |
-| `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 202 |
-| `Features/Settings/SettingsView.swift` | 设置入口，导航到提示词与技能 | 165 |
+| `Core/Storage/ConversationStore.swift` | 会话增删查改 | 86 |
+| `Core/Storage/StoredModels.swift` | SwiftData 模型（`StoredMessage.usageJSON` 存每轮用量） | 87 |
+| `Core/Storage/BalanceStore.swift` | 余额状态、周期刷新、退避重试、网络恢复补刷 | 278 |
+| `Core/Storage/BalanceRetryPolicy.swift` | 余额重试退避表与可重试判定 | 35 |
+| `Core/SelfTest.swift` | 离线自检（83 条） | 401 |
+| `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量（首 token 计时、实时速度） | 458 |
+| `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条、模式胶囊 | 498 |
+| `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 204 |
+| `Features/Settings/SettingsView.swift` | 设置入口，导航到提示词与技能 | 179 |
 | `Features/Settings/SystemPromptView.swift` | 系统提示词编辑 | 49 |
-| `Features/Settings/SkillsView.swift` | 技能列表、导入、编辑 | 263 |
-| `UI/BalanceCard.swift` | 余额卡片、手机端胶囊、明细弹层 | 206 |
+| `Features/Settings/SkillsView.swift` | 技能列表、导入、编辑 | 278 |
+| `UI/BalanceCard.swift` | 余额卡片、手机端胶囊、明细弹层 | 214 |
+| `UI/SessionMetricsBar.swift` | 会话指标条与用量明细弹层 | 244 |
 | `UI/Blocks/BlockView.swift` | 各内容块的视图 | 258 |
-| `UI/Markdown/MarkdownView.swift` | Markdown 渲染 + 代码块 + 表格（可选衬线排印） | 311 |
+| `UI/Markdown/MarkdownView.swift` | Markdown 渲染 + 代码块 + 表格（可选衬线排印） | 334 |
 | `UI/Markdown/MarkdownParser.swift` | 块级 Markdown 解析 | 212 |
 | `UI/Markdown/SyntaxHighlighter.swift` | 正则语法高亮 | 86 |
-| `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 17 |
+| `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 9 |
 
 ### 三个必须知道的决策
 
@@ -158,6 +166,7 @@ KeychainStore          API Key
 | `DS_SHOW_SETTINGS=1` | 启动直接打开设置页 |
 | `DS_SHOW_HISTORY=1` | 启动直接拉出会话历史浮层 |
 | `DS_SHOW_BALANCE=1` | 启动直接打开余额明细 |
+| `DS_SHOW_USAGE=1` | 启动直接打开会话用量明细 |
 | `DS_START_EMPTY=1` | 不进任何会话，停在空态 |
 | `DS_DEMO_THREAD=1` | 灌入一段示例对话（`SampleData`），不写库 |
 | `DS_DEMO_HISTORY=1` | 历史浮层用五条演示条目，不动 SwiftData |
@@ -168,6 +177,7 @@ KeychainStore          API Key
 | `DS_SLOW_ANIM=1` | 抽屉动画放慢到 4 秒，方便逐帧截图 |
 | `DS_DEMO_IMAGE=1` | 配合 `DS_AUTO_PROMPT` 发一条带测试图的请求 |
 | `DS_PENDING_IMAGE=1` | 只在输入条挂一张待发图，不发送，截预览条用 |
+| `DS_SWITCH_DURING_STREAM=1` | 发完消息 1.2 秒后自动新建会话，验「流式中切会话不串台」 |
 | `DS_SHOW_GALLERY=1` | 直接打开全屏图片流（3 张测试图） |
 | `DS_IMAGE_PROGRESS=1` | 显示一个假的压缩进度条，截进度态用 |
 | `DS_PRINT_SYSTEM=1` | 把拼好的 system 写到沙盒 `Documents/system-prompt.txt` |
@@ -628,14 +638,58 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 
 **注**：第 5、6 轮日志里引用的 `shots/ipad-*.png` 随这次清理删除，那几处路径不再有效；`TECH_PLAN.md` 顶部已标为立项方案，现状以本文件为准。
 
+### 2026-11-25 · 第 19 轮：余额刷新修复 + 会话用量三项
+
+**修的问题**：实机上余额卡片经常显示失败，要手动刷新才恢复。
+
+根因不是接口，是调度只有两个触发点（启动、发送结束）：一次冷启动抢在网络就绪前、或者从后台回来时连接已失效，错误就停在卡片上，之后再也不会有请求。顺手发现的三个小毛病一起修了：
+
+| 问题 | 修法 |
+|---|---|
+| 失败后无重试 | `BalanceRetryPolicy`：5 / 15 / 45 / 120 秒退避，401/402/403 与 4xx 不重试，429 重试 |
+| 回前台不刷新 | `RootView` 监听 `scenePhase`，`.active` 时 `refreshIfStale(within: 30)` |
+| 网络切换不刷新 | `BalanceStore` 内建 `NWPathMonitor`，网络恢复时补刷 |
+| 后台挂起后请求取消被当成 HTTP 错误 | `BalanceError.cancelled` 单独一类，不算失败 |
+| 取消旧请求时旧任务的 `defer` 会把 `isLoading` 置回 false | 改成 generation 校验，只有当前代次的请求能改状态 |
+| 一次失败把金额也染成橙色、数字被错误文案盖住 | 失败保留旧快照，副标题写「HH:mm 更新 · 稍后自动重试」；金额只在低额/无 Key 时变橙 |
+| 出错时点卡片只会打开明细 | 轻点直接重试，长按才看明细；卡片右上角换成重试图标 |
+| `waitsForConnectivity = false` + 15 秒超时 | 改为 true，25 / 45 秒，加 `reloadIgnoringLocalAndRemoteCacheData` |
+| 只有 3 分钟周期刷新 | 已有；加 `nextRetryAt`，避免周期刷新和退避连发 |
+
+**新增三项指标**（输入框下方一行，点开明细）：
+
+1. **上下文剩多少**：`1M 窗口 - (最近一轮输入 + 输出)`。环填剩余比例，文字报绝对 token。
+2. **缓存命中**：`cache_read_input_tokens / 总输入`。Anthropic 口径按「未命中 + 命中 + 写入」算分母；DeepSeek 原生 `prompt_cache_hit_tokens` 口径不重复加。
+3. **tok/s**：流式中按已生成字符 ÷（当前 - 首 token）估；结束后换成 `output_tokens ÷ 首 token 到结束`。
+
+**协议层的改动**
+
+- `StreamEvent.messageStart` 从无载荷改成带 `model` 与 `usage`。原来直接丢弃了 `message_start` 里的 `input_tokens` 与缓存字段，只靠 `message_delta` 拿不到输入规模。
+- `Usage` 加 `cacheCreationTokens` / `inputIncludesCache` / `merge(with:)`，字段缺失时取各自有效值，不用 0 覆盖。
+- `StoredMessage` 加 `usageJSON`（Optional，轻量迁移），切换会话和重启后指标能恢复。
+- `ModelCatalog` 存上下文窗口（两个模型都是 1M），`SessionMetrics` 统一格式化（`972K` / `1.0M` / `88%` / `46 tok/s`）。
+
+**顺手修的一个串台**
+
+流式中点「新建对话」或切换会话时，旧任务的收尾会拿新的 `currentConversation` 落库、并把旧 usage 盖到新会话的指标上。`ChatViewModel` 加 `roundID` 代次：`startNew` / `load` 换一代，旧任务的事件、报错、`finish` 全部作废；请求用的 `history` 也在发送时拍快照。验证钩子 `DS_SWITCH_DURING_STREAM=1`：流式中切到新会话后，新会话保持空态、指标条是 `上下文剩 1.0M`，没有被旧轮的 `991K / 87%` 污染。
+
+**验证**
+
+- 自检 49 → 83 条：Usage 两套口径、两段合并、指标格式化、余量不为负、退避表、可重试判定、usage 落库回读
+- mock 端到端：`上下文剩 990K · 缓存命中 87% · 301 tok/s`，和手算一致（9440 输入 / 96 输出）
+- 失败重试：mock 前 1 次回 503，启动 10 秒后卡片自己恢复成 `¥14.41`，没点任何按钮
+- 流式中切会话：旧任务不再改新会话的消息与指标（`DS_SWITCH_DURING_STREAM=1`）
+- 重启恢复：发完一轮杀进程再启动，指标从落库的 usage 恢复成 `990K / 87%`
+- 双端截图：`shots/redesign/{ipad,iphone}-usage.png`，深色模式也过了一遍
+
+**没验证到的**：真实 API 的 usage 字段口径（本地没有可用 Key，见 §2.1）；模拟器造不出「回后台再回前台」，`scenePhase` 那条路径只能真机确认。
+
 ---
 
 ## 6. 下一步
 
-按优先级排，理由是不解决前两条，后面的工作会在错误的基础上返工。
-
-1. **换一把有效 Key，跑真实模型**（阻塞中，卡在 Key）—— 见 §2.1。
-2. **真机签名**（阻塞中，卡在 Apple ID）—— 模拟器验不了的引用弹层、横屏、键盘交互都要在真机上看。
+1. **核对真实 usage 口径**（§2.1 第 4 条）：实机跑一轮，看「本轮输入」是否接近上下文规模；偏差大就调 `Usage` 的合并口径。
+2. **真机确认前台恢复补刷**：模拟器造不出「回后台再回前台」，`scenePhase` 与网络恢复两条路径只能在真机上看。
 3. **真实数据下的渲染修整**：`ContentBlock.grouped` 每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块几千字展开会把正文顶出屏幕。
 4. **会话管理**：重命名、搜索。
 5. 图片上传（`deepseek-flash` 支持图像理解，走 `image` 内容块）

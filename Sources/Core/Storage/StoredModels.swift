@@ -49,6 +49,9 @@ final class StoredMessage {
     /// "complete" / "stopped" / "failed" / "refused"
     var status: String
     var createdAt: Date
+    /// 这一轮请求的用量（`Usage` 的 JSON）。可选：老库里的消息没这个字段，
+    /// 读到 nil 就按「没有用量」处理，不影响历史回读。
+    var usageJSON: String?
 
     var conversation: StoredConversation?
 
@@ -56,7 +59,8 @@ final class StoredMessage {
          role: String,
          blocksJSON: Data,
          plainText: String,
-         status: String = "complete") {
+         status: String = "complete",
+         usage: Usage? = nil) {
         self.id = UUID()
         self.order = order
         self.role = role
@@ -64,9 +68,20 @@ final class StoredMessage {
         self.plainText = plainText
         self.status = status
         self.createdAt = Date()
+        self.usageJSON = Self.encode(usage)
     }
 
     var rawBlocks: [[String: Any]] {
         (try? JSONSerialization.jsonObject(with: blocksJSON)) as? [[String: Any]] ?? []
+    }
+
+    var usage: Usage? {
+        guard let usageJSON, let data = usageJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(Usage.self, from: data)
+    }
+
+    private static func encode(_ usage: Usage?) -> String? {
+        guard let usage, let data = try? JSONEncoder().encode(usage) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

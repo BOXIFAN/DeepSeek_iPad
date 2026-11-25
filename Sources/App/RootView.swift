@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var chat = ChatViewModel()
     @State private var balance = BalanceStore.shared
@@ -14,6 +15,7 @@ struct RootView: View {
     @State private var showHistory = false
     @State private var showSettings = ProcessInfo.processInfo.environment["DS_SHOW_SETTINGS"] == "1"
     @State private var showBalanceSheet = ProcessInfo.processInfo.environment["DS_SHOW_BALANCE"] == "1"
+    @State private var showSessionStats = ProcessInfo.processInfo.environment["DS_SHOW_USAGE"] == "1"
     @State private var draft = ""
     @State private var pendingImages: [MessageImage] = []
     @State private var photoItems: [PhotosPickerItem] = []
@@ -88,6 +90,10 @@ struct RootView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSessionStats) {
+            SessionStatsSheet(metrics: chat.metrics,
+                              liveTokensPerSecond: chat.liveTokensPerSecond)
+        }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
         } action: { width in
@@ -105,7 +111,13 @@ struct RootView: View {
         }
         .onChange(of: chat.isStreaming) { _, streaming in
             if !streaming {
-                balance.refreshIfStale(within: 5)
+                balance.refreshIfStale(within: 10)
+            }
+        }
+        // 从后台回来、切分屏、解锁后都补一次；这是真机上余额卡片停在旧值的主因
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                balance.refreshIfStale(within: 30)
             }
         }
         .tint(Theme.accent)
@@ -330,6 +342,15 @@ struct RootView: View {
                 onPickImage: { showPhotoPicker = true }
             )
             .frame(maxWidth: composerWidth)
+
+            SessionMetricsBar(
+                metrics: chat.metrics,
+                liveTokensPerSecond: chat.liveTokensPerSecond
+            ) {
+                showSessionStats = true
+            }
+            .frame(maxWidth: composerWidth)
+            .padding(.top, -3)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, isRegular ? 32 : 16)
@@ -543,6 +564,8 @@ struct RootView: View {
         if environment["DS_BALANCE_DEMO"] == "1" {
             balance.applyDemoSnapshot()
         } else {
+            // 周期刷新 + 网络恢复监听交给 store，视图只把两个时机（启动、回前台）递过去
+            balance.start()
             balance.refreshIfStale(within: 5)
         }
 
@@ -586,6 +609,13 @@ struct RootView: View {
                 images = [image]
             }
             sendText(prompt, images: images)
+        }
+
+        // 验证「流式中切会话」：旧任务收尾不能把用量或消息写进新会话
+        if environment["DS_SWITCH_DURING_STREAM"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                startNew()
+            }
         }
     }
 

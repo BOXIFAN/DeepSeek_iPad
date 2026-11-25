@@ -154,9 +154,11 @@ struct HistoryPanel: View {
                     if balance.isLoading {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Image(systemName: "arrow.clockwise")
+                        Image(systemName: balance.errorText != nil
+                              ? "exclamationmark.arrow.circlepath"
+                              : "arrow.clockwise")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(balance.errorText != nil ? Color.orange : Color.secondary)
                     }
                 }
                 .padding(.horizontal, 16)

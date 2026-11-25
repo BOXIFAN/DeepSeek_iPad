@@ -53,6 +53,7 @@ final class ConversationStore {
                 blocks: [[String: Any]],
                 plainText: String,
                 status: String = "complete",
+                usage: Usage? = nil,
                 autoTitle: String? = nil) -> StoredMessage {
         let nextOrder = (conversation.messages.map(\.order).max() ?? -1) + 1
         let data = (try? JSONSerialization.data(withJSONObject: blocks)) ?? Data()
@@ -60,7 +61,8 @@ final class ConversationStore {
                                     role: role,
                                     blocksJSON: data,
                                     plainText: plainText,
-                                    status: status)
+                                    status: status,
+                                    usage: usage)
         message.conversation = conversation
         context.insert(message)
 

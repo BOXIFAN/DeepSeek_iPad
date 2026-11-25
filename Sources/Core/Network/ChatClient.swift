@@ -2,22 +2,94 @@ import Foundation
 
 // MARK: - 用量
 
-struct Usage: Sendable, Equatable {
+/// 一轮请求的 token 用量。
+///
+/// 两套口径都认：
+/// - **Anthropic 口径**（`/anthropic/v1/messages` 的正式语义）：`input_tokens` 只算未命中
+///   缓存的部分，总输入 = `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`。
+/// - **DeepSeek 原生口径**：`prompt_tokens` 已经是总数，命中量在 `prompt_cache_hit_tokens`。
+///   兼容层如果直接透传原生字段，就用 `inputIncludesCache` 标住，避免把命中量加两遍。
+struct Usage: Sendable, Equatable, Codable {
     var inputTokens = 0
     var outputTokens = 0
+    /// 命中缓存、按折扣计价的输入
     var cacheReadTokens = 0
+    /// 写入缓存的输入（Anthropic 口径才有，不额外计费一次上下文）
+    var cacheCreationTokens = 0
     var thinkingTokens = 0
+    /// `inputTokens` 是否已经包含缓存命中（原生 `prompt_tokens` 口径）
+    var inputIncludesCache = false
+
+    /// 下一轮请求大概要带上的输入量，也就是这一轮占掉的上下文。
+    var totalInputTokens: Int {
+        inputIncludesCache
+            ? max(inputTokens, cacheReadTokens + cacheCreationTokens)
+            : inputTokens + cacheReadTokens + cacheCreationTokens
+    }
+
+    var totalTokens: Int {
+        totalInputTokens + outputTokens
+    }
+
+    var isEmpty: Bool {
+        totalTokens == 0
+    }
+
+    /// 命中率的分母是总输入，不是未命中部分。没输入时返回 nil，界面显示「—」。
+    var cacheHitRate: Double? {
+        let total = totalInputTokens
+        guard total > 0 else { return nil }
+        return min(1, Double(cacheReadTokens) / Double(total))
+    }
 
     static func from(_ dict: [String: Any]?) -> Usage? {
         guard let dict else { return nil }
+
         var usage = Usage()
-        usage.inputTokens = dict["input_tokens"] as? Int ?? 0
-        usage.outputTokens = dict["output_tokens"] as? Int ?? 0
-        usage.cacheReadTokens = dict["cache_read_input_tokens"] as? Int ?? 0
+        usage.inputTokens = int(dict["input_tokens"]) ?? int(dict["prompt_tokens"]) ?? 0
+        usage.outputTokens = int(dict["output_tokens"]) ?? int(dict["completion_tokens"]) ?? 0
+
+        let read = int(dict["cache_read_input_tokens"])
+        let creation = int(dict["cache_creation_input_tokens"])
+        if read != nil || creation != nil {
+            usage.cacheReadTokens = read ?? 0
+            usage.cacheCreationTokens = creation ?? 0
+            usage.inputIncludesCache = false
+        } else if let hit = int(dict["prompt_cache_hit_tokens"]) {
+            usage.cacheReadTokens = hit
+            usage.cacheCreationTokens = 0
+            usage.inputIncludesCache = true
+            usage.inputTokens = int(dict["prompt_tokens"]) ?? usage.inputTokens
+        }
+
         if let details = dict["output_tokens_details"] as? [String: Any] {
-            usage.thinkingTokens = details["thinking_tokens"] as? Int ?? 0
+            usage.thinkingTokens = int(details["thinking_tokens"]) ?? 0
         }
         return usage
+    }
+
+    /// 流式里字段分两段到：`message_start` 给输入与缓存，`message_delta` 给最终输出。
+    /// 各自缺的字段保留原值，不能拿 0 覆盖。
+    func merged(with other: Usage) -> Usage {
+        var result = self
+        if other.inputTokens > 0 { result.inputTokens = other.inputTokens }
+        if other.outputTokens > 0 { result.outputTokens = max(result.outputTokens, other.outputTokens) }
+        if other.cacheReadTokens > 0 { result.cacheReadTokens = other.cacheReadTokens }
+        if other.cacheCreationTokens > 0 { result.cacheCreationTokens = other.cacheCreationTokens }
+        if other.thinkingTokens > 0 { result.thinkingTokens = other.thinkingTokens }
+        if other.inputIncludesCache { result.inputIncludesCache = true }
+        return result
+    }
+
+    /// JSON 数字既可能来 Int 也可能来 Double（某些代理会写成 128.0）。
+    private static func int(_ value: Any?) -> Int? {
+        switch value {
+        case let value as Int: return value
+        case let value as Double: return Int(value)
+        case let value as NSNumber: return value.intValue
+        case let value as String: return Int(value)
+        default: return nil
+        }
     }
 }
 
@@ -35,7 +107,8 @@ enum BlockDelta: Sendable {
 /// 一次流式响应被拆成的事件序列。顺序与官方文档一致：
 /// message_start → (blockStart → delta… → blockStop)* → message_delta → message_stop
 enum StreamEvent: Sendable {
-    case messageStart
+    /// `message_start` 里带首段 usage（输入与缓存命中）和服务端认定的模型名。
+    case messageStart(model: String?, usage: Usage?)
     case blockStart(index: Int, block: ContentBlock, raw: Data)
     case blockDelta(index: Int, delta: BlockDelta)
     case blockStop(index: Int)
@@ -230,7 +303,11 @@ final class ChatClient {
 
         switch type {
         case "message_start":
-            return [.messageStart]
+            let message = json["message"] as? [String: Any]
+            let model = (message?["model"] as? String) ?? (json["model"] as? String)
+            let usage = Usage.from((message?["usage"] as? [String: Any])
+                                    ?? (json["usage"] as? [String: Any]))
+            return [.messageStart(model: model, usage: usage)]
 
         case "content_block_start":
             guard let index = json["index"] as? Int,

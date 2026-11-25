@@ -147,6 +147,96 @@ enum SelfTest {
         let garbage = "not json".data(using: .utf8)!
         check("Balance", "非 JSON 抛错", (try? BalanceClient.decode(garbage)) == nil)
 
+        // ---------- 用量解析 ----------
+
+        let anthropicUsage = Usage.from([
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 9_000,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 500
+        ])
+        check("Usage", "Anthropic 口径总输入 = 未命中 + 命中",
+              anthropicUsage?.totalInputTokens == 10_000,
+              "得到 \(anthropicUsage?.totalInputTokens ?? -1)")
+        check("Usage", "命中率按总输入算",
+              abs((anthropicUsage?.cacheHitRate ?? 0) - 0.9) < 0.0001,
+              "得到 \(anthropicUsage?.cacheHitRate ?? -1)")
+        check("Usage", "输出计入总量", anthropicUsage?.totalTokens == 10_500)
+
+        let nativeUsage = Usage.from([
+            "prompt_tokens": 10_000,
+            "prompt_cache_hit_tokens": 9_000,
+            "completion_tokens": 500
+        ])
+        check("Usage", "原生口径不把命中量加两遍",
+              nativeUsage?.totalInputTokens == 10_000,
+              "得到 \(nativeUsage?.totalInputTokens ?? -1)")
+        check("Usage", "原生口径命中率",
+              abs((nativeUsage?.cacheHitRate ?? 0) - 0.9) < 0.0001,
+              "得到 \(nativeUsage?.cacheHitRate ?? -1)")
+
+        let startUsage = Usage.from([
+            "input_tokens": 1_000,
+            "cache_read_input_tokens": 9_000,
+            "output_tokens": 1
+        ])
+        let deltaUsage = Usage.from(["output_tokens": 500])
+        let merged = startUsage?.merged(with: deltaUsage ?? Usage())
+        check("Usage", "两段 usage 合并保留输入与缓存",
+              merged?.totalInputTokens == 10_000,
+              "得到 \(merged?.totalInputTokens ?? -1)")
+        check("Usage", "合并取最终输出", merged?.outputTokens == 500,
+              "得到 \(merged?.outputTokens ?? -1)")
+
+        check("Usage", "没有缓存时命中率为 0",
+              Usage.from(["input_tokens": 800])?.cacheHitRate == 0)
+        check("Usage", "空字典不崩", Usage.from([:])?.totalTokens == 0)
+
+        // ---------- 会话指标 ----------
+
+        check("Metrics", "小于一千直接显示", SessionMetrics.tokenText(812) == "812")
+        check("Metrics", "千级一位小数", SessionMetrics.tokenText(3_240) == "3.2K")
+        check("Metrics", "大数字取整", SessionMetrics.tokenText(972_000) == "972K")
+        check("Metrics", "百万级", SessionMetrics.tokenText(1_000_000) == "1.0M")
+        check("Metrics", "缓存百分比", SessionMetrics.cacheText(0.9) == "90%")
+        check("Metrics", "速度取整", SessionMetrics.rateText(46.4) == "46 tok/s")
+        check("Metrics", "低速保留一位", SessionMetrics.rateText(7.25) == "7.2 tok/s")
+        check("Metrics", "非法速度返回 nil", SessionMetrics.rateText(0) == nil)
+        check("Metrics", "字符估 token", SessionMetrics.estimatedTokens(forCharacters: 2_600) == 1_000)
+
+        var metrics = SessionMetrics()
+        metrics.reset(for: ModelCatalog.flash)
+        metrics.apply(Usage(inputTokens: 1_000,
+                            outputTokens: 500,
+                            cacheReadTokens: 28_500),
+                      model: nil,
+                      tokensPerSecond: 40)
+        check("Metrics", "剩余 = 窗口 - 已用",
+              metrics.remainingTokens == 970_000,
+              "得到 \(metrics.remainingTokens)")
+        check("Metrics", "未用满不告警", !metrics.isNearLimit)
+        check("Metrics", "窗口取模型表", metrics.contextWindow == 1_000_000)
+
+        var nearLimit = SessionMetrics()
+        nearLimit.reset(for: ModelCatalog.flash)
+        nearLimit.usedTokens = 900_000
+        check("Metrics", "剩余不到 15% 告警", nearLimit.isNearLimit)
+        check("Metrics", "剩余不为负",
+              SessionMetrics(usedTokens: 1_200_000).remainingTokens == 0)
+
+        // ---------- 余额重试策略 ----------
+
+        check("Retry", "第 1 次等 5 秒", BalanceRetryPolicy.delay(afterFailure: 1) == 5)
+        check("Retry", "第 4 次等 120 秒", BalanceRetryPolicy.delay(afterFailure: 4) == 120)
+        check("Retry", "第 5 次不再重试", BalanceRetryPolicy.delay(afterFailure: 5) == nil)
+        check("Retry", "401 不重试", !BalanceRetryPolicy.isRetryable(BalanceError.http(401)))
+        check("Retry", "402 不重试", !BalanceRetryPolicy.isRetryable(BalanceError.http(402)))
+        check("Retry", "429 重试", BalanceRetryPolicy.isRetryable(BalanceError.http(429)))
+        check("Retry", "503 重试", BalanceRetryPolicy.isRetryable(BalanceError.http(503)))
+        check("Retry", "断网重试", BalanceRetryPolicy.isRetryable(BalanceError.offline))
+        check("Retry", "超时重试", BalanceRetryPolicy.isRetryable(BalanceError.timeout))
+        check("Retry", "主动取消不重试", !BalanceRetryPolicy.isRetryable(BalanceError.cancelled))
+
         // ---------- 图片 ----------
 
         if let demo = makeDemoImage() {
@@ -215,13 +305,28 @@ enum SelfTest {
             let first = try ModelContainer(for: schema, configurations: config)
             let context = ModelContext(first)
             context.insert(StoredSkill(name: "持久化验证", summary: "", instructions: "指令正文"))
-            context.insert(StoredConversation(title: "验证会话", model: "deepseek-flash"))
+
+            let conversation = StoredConversation(title: "验证会话", model: "deepseek-flash")
+            context.insert(conversation)
+
+            let blocks: [[String: Any]] = [["type": "text", "text": "回答"]]
+            let blocksData = (try? JSONSerialization.data(withJSONObject: blocks)) ?? Data()
+            let message = StoredMessage(order: 0,
+                                        role: "assistant",
+                                        blocksJSON: blocksData,
+                                        plainText: "回答",
+                                        usage: Usage(inputTokens: 1_000,
+                                                     outputTokens: 500,
+                                                     cacheReadTokens: 9_000))
+            message.conversation = conversation
+            context.insert(message)
             try context.save()
 
             let second = try ModelContainer(for: schema, configurations: config)
             let reopen = ModelContext(second)
             let skills = try reopen.fetch(FetchDescriptor<StoredSkill>())
             let conversations = try reopen.fetch(FetchDescriptor<StoredConversation>())
+            let messages = try reopen.fetch(FetchDescriptor<StoredMessage>())
 
             results.append(Result(group: "持久化", name: "技能写入后重开还在",
                                   passed: skills.count == 1 && skills.first?.name == "持久化验证",
@@ -229,6 +334,9 @@ enum SelfTest {
             results.append(Result(group: "持久化", name: "会话写入后重开还在",
                                   passed: conversations.count == 1 && conversations.first?.title == "验证会话",
                                   detail: "conversations=\(conversations.count)"))
+            results.append(Result(group: "持久化", name: "用量随消息落库",
+                                  passed: messages.first?.usage?.totalInputTokens == 10_000,
+                                  detail: "usage=\(String(describing: messages.first?.usage))"))
 
             try? FileManager.default.removeItem(at: directory)
         } catch {

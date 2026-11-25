@@ -28,6 +28,10 @@ final class ChatViewModel {
     private(set) var isStreaming = false
     /// 来自 `title` 参数的服务端会话标题
     private(set) var generatedTitle: String?
+    /// 会话级用量：剩余上下文、缓存命中、最近一轮速度
+    private(set) var metrics = SessionMetrics()
+    /// 流式中按字符估算的实时速度，结束后换成服务端 usage 算出来的值
+    private(set) var liveTokensPerSecond: Double?
     var errorText: String?
     /// 每次收到流事件自增，供视图层触发滚动跟随
     private(set) var streamTick = 0
@@ -46,12 +50,22 @@ final class ChatViewModel {
     /// signature_delta 累积
     private var blockSignatures: [Int: String] = [:]
 
+    // 一轮请求的计量状态
+    private var roundUsage: Usage?
+    private var serverModel: String?
+    private var firstDeltaAt: Date?
+    private var lastSpeedSampleAt: Date?
+    private var streamedCharacters = 0
+    /// 当前轮次的代次。流式中切会话/新建时换一个，旧任务的收尾就不能再改指标或落库。
+    private var roundID = UUID()
+
     // MARK: - 会话
 
     /// 开一个新会话。下次发送时才真正写库，避免点一下就留一条空会话。
     func startNew() {
         task?.cancel()
         task = nil
+        roundID = UUID()
         isStreaming = false
         messages = []
         history = []
@@ -61,11 +75,14 @@ final class ChatViewModel {
         generatedTitle = nil
         currentConversation = nil
         conversationTitle = "新对话"
+        resetRoundMetrics()
+        metrics = SessionMetrics()
     }
 
     func load(_ conversation: StoredConversation) {
         task?.cancel()
         task = nil
+        roundID = UUID()
         isStreaming = false
         currentConversation = conversation
         conversationTitle = conversation.title
@@ -73,6 +90,8 @@ final class ChatViewModel {
         blockSignatures = [:]
         errorText = nil
         generatedTitle = nil
+        resetRoundMetrics()
+        metrics = Self.metrics(for: conversation)
 
         messages = conversation.sortedMessages.map { stored in
             if stored.role == "user" {
@@ -102,6 +121,7 @@ final class ChatViewModel {
     func loadDemoThread() {
         task?.cancel()
         task = nil
+        roundID = UUID()
         isStreaming = false
         history = []
         blockTemplates = [:]
@@ -110,6 +130,18 @@ final class ChatViewModel {
         currentConversation = nil
         generatedTitle = "DeepSeek 模型能力与价格"
         conversationTitle = "DeepSeek 模型能力与价格"
+        resetRoundMetrics()
+        metrics = SessionMetrics(
+            model: ModelCatalog.flash,
+            contextWindow: ModelCatalog.contextWindow(for: ModelCatalog.flash),
+            usedTokens: 28_460,
+            lastUsage: Usage(inputTokens: 3_240,
+                             outputTokens: 1_180,
+                             cacheReadTokens: 24_040,
+                             cacheCreationTokens: 0,
+                             thinkingTokens: 620),
+            tokensPerSecond: 46
+        )
         messages = [
             DisplayMessage(id: "demo-user-1",
                            role: .user,
@@ -170,15 +202,31 @@ final class ChatViewModel {
         errorText = nil
         generatedTitle = nil
 
+        // 新一轮：保留上一轮的上下文占用（上下文只会涨），清掉上一轮的速度与缓存
+        resetRoundMetrics()
+        metrics.model = options.model
+        metrics.contextWindow = ModelCatalog.contextWindow(for: options.model)
+        metrics.tokensPerSecond = nil
+
+        // 请求用的历史在这里拍快照：Task 真正跑起来之前用户可能已经切换会话
+        let outgoing = history
+        let round = UUID()
+        roundID = round
+
         task = Task { [weak self] in
             guard let self else { return }
             let started = Date()
             do {
-                for try await event in self.client.stream(apiKey: apiKey, messages: self.history, options: options) {
+                for try await event in self.client.stream(apiKey: apiKey,
+                                                          messages: outgoing,
+                                                          options: options) {
                     if Task.isCancelled { break }
+                    guard round == self.roundID else { break }
                     self.apply(event, to: assistantID, startedAt: started)
                 }
             } catch {
+                // 这一轮已经被 startNew/load 作废：不弹错、不改当前会话
+                guard round == self.roundID else { return }
                 self.errorText = error.localizedDescription
                 self.update(assistantID) { message in
                     message.errorText = error.localizedDescription
@@ -186,7 +234,7 @@ final class ChatViewModel {
                     message.stopReason = "failed"
                 }
             }
-            self.finish(assistantID)
+            self.finish(assistantID, roundID: round)
         }
     }
 
@@ -198,7 +246,7 @@ final class ChatViewModel {
             messages[index].isStreaming = false
             messages[index].stopReason = "stopped"
         }
-        finish(messages.last(where: { $0.role == .assistant })?.id)
+        finish(messages.last(where: { $0.role == .assistant })?.id, roundID: roundID)
     }
 
     // MARK: - 事件应用
@@ -206,8 +254,17 @@ final class ChatViewModel {
     private func apply(_ event: StreamEvent, to messageID: String, startedAt: Date) {
         streamTick &+= 1
         switch event {
-        case .messageStart:
-            break
+        case .messageStart(let model, let usage):
+            if let model, !model.isEmpty {
+                serverModel = model
+                metrics.model = model
+                metrics.contextWindow = ModelCatalog.contextWindow(for: model)
+            }
+            if let usage {
+                roundUsage = (roundUsage ?? Usage()).merged(with: usage)
+                // 输入与缓存这一半已经确定，先落到指标上，流式过程中「缓存命中」就不会空着
+                metrics.apply(usage, model: model, tokensPerSecond: nil)
+            }
 
         case .blockStart(let index, let block, let raw):
             blockTemplates[index] = raw
@@ -222,6 +279,8 @@ final class ChatViewModel {
         case .blockDelta(let index, let delta):
             if case .signature(let chunk) = delta {
                 blockSignatures[index] = (blockSignatures[index] ?? "") + chunk
+            } else {
+                noteProgress(delta)
             }
             update(messageID) { message in
                 guard index < message.blocks.count else { return }
@@ -237,7 +296,10 @@ final class ChatViewModel {
                                                  duration: Date().timeIntervalSince(startedAt))
             }
 
-        case .messageDelta(let stopReason, let title, _):
+        case .messageDelta(let stopReason, let title, let usage):
+            if let usage {
+                roundUsage = (roundUsage ?? Usage()).merged(with: usage)
+            }
             if let title, !title.isEmpty {
                 generatedTitle = title
             }
@@ -279,11 +341,28 @@ final class ChatViewModel {
 
     // MARK: - 收尾
 
-    private func finish(_ messageID: String?) {
+    private func finish(_ messageID: String?, roundID: UUID? = nil) {
+        // 已被 startNew/load 作废的旧任务：不改当前会话的指标，也不往新会话里写消息
+        if let roundID, roundID != self.roundID { return }
+
         isStreaming = false
         if let messageID {
             update(messageID) { $0.isStreaming = false }
         }
+
+        // 先结算本轮的用量：usage 缺失时用字符数兜底，至少让卡片有数可看
+        let endedAt = Date()
+        let generationSeconds = firstDeltaAt.map { endedAt.timeIntervalSince($0) } ?? 0
+        var usage = roundUsage ?? Usage()
+        if usage.outputTokens == 0, streamedCharacters > 0 {
+            usage.outputTokens = SessionMetrics.estimatedTokens(forCharacters: streamedCharacters)
+        }
+        let speed: Double? = generationSeconds > 0.25 && usage.outputTokens > 0
+            ? Double(usage.outputTokens) / generationSeconds
+            : nil
+        metrics.apply(usage, model: serverModel, tokensPerSecond: speed)
+        liveTokensPerSecond = nil
+        lastSpeedSampleAt = nil
 
         guard let last = messages.last(where: { $0.role == .assistant }) else { return }
         let content = buildAssistantContent(from: last)
@@ -306,6 +385,7 @@ final class ChatViewModel {
                          blocks: content,
                          plainText: plain,
                          status: last.stopReason ?? "complete",
+                         usage: usage.isEmpty ? nil : usage,
                          autoTitle: generatedTitle)
             conversationTitle = conversation.title
         }
@@ -343,5 +423,54 @@ final class ChatViewModel {
     private func update(_ messageID: String, _ mutate: (inout DisplayMessage) -> Void) {
         guard let index = messages.firstIndex(where: { $0.id == messageID }) else { return }
         mutate(&messages[index])
+    }
+
+    // MARK: - 用量计量
+
+    private func resetRoundMetrics() {
+        roundUsage = nil
+        serverModel = nil
+        firstDeltaAt = nil
+        lastSpeedSampleAt = nil
+        streamedCharacters = 0
+        liveTokensPerSecond = nil
+    }
+
+    /// 从落库的最近一轮用量恢复会话指标，切换历史会话时数字才不会归零。
+    private static func metrics(for conversation: StoredConversation) -> SessionMetrics {
+        var metrics = SessionMetrics()
+        metrics.reset(for: conversation.model)
+        if let usage = conversation.sortedMessages.reversed().compactMap(\.usage).first {
+            metrics.lastUsage = usage
+            metrics.usedTokens = usage.totalInputTokens + usage.outputTokens
+        }
+        return metrics
+    }
+
+    /// 流式过程中按已生成字符估算速度，每 0.2 秒最多采一次样，避免每个 delta 都重算。
+    private func noteProgress(_ delta: BlockDelta) {
+        let count: Int
+        switch delta {
+        case .thinking(let text), .text(let text):
+            count = text.count
+        case .signature, .citation:
+            return
+        }
+        guard count > 0 else { return }
+
+        streamedCharacters += count
+        let now = Date()
+        if firstDeltaAt == nil {
+            firstDeltaAt = now
+            return
+        }
+        guard let first = firstDeltaAt else { return }
+        let elapsed = now.timeIntervalSince(first)
+        guard elapsed >= 0.3 else { return }
+        if let lastSpeedSampleAt, now.timeIntervalSince(lastSpeedSampleAt) < 0.2 { return }
+
+        let tokens = SessionMetrics.estimatedTokens(forCharacters: streamedCharacters)
+        liveTokensPerSecond = Double(tokens) / elapsed
+        lastSpeedSampleAt = now
     }
 }

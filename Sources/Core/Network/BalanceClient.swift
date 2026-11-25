@@ -31,8 +31,11 @@ struct BalanceSnapshot: Sendable, Equatable {
 enum BalanceError: LocalizedError {
     case missingKey
     case http(Int)
-    case format
+    case timeout
     case offline
+    case cancelled
+    case network(Int)
+    case format
 
     var errorDescription: String? {
         switch self {
@@ -49,10 +52,16 @@ enum BalanceError: LocalizedError {
             default:
                 return "查询失败（HTTP \(code)）"
             }
-        case .format:
-            return "余额响应格式不对"
+        case .timeout:
+            return "查询超时，点一下重试"
         case .offline:
             return "网络不通，稍后再试"
+        case .cancelled:
+            return "查询已取消"
+        case .network(let code):
+            return "网络错误（\(code)）"
+        case .format:
+            return "余额响应格式不对"
         }
     }
 }
@@ -68,9 +77,11 @@ final class BalanceClient {
 
     init() {
         let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 20
-        config.waitsForConnectivity = false
+        // 真机上从后台回来时网络栈要几秒才恢复：等它，不要立刻判失败
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 25
+        config.timeoutIntervalForResource = 45
+        config.httpMaximumConnectionsPerHost = 2
         session = URLSession(configuration: config)
         endpoint = Self.endpoint()
     }
@@ -109,15 +120,28 @@ final class BalanceClient {
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // 余额是账户数据，既不吃本地缓存，也不让中间代理缓存住
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 25
 
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch let error as URLError {
-            throw error.code == .notConnectedToInternet || error.code == .cannotConnectToHost
-                ? BalanceError.offline
-                : BalanceError.http(error.code.rawValue)
+            switch error.code {
+            case .notConnectedToInternet, .cannotConnectToHost,
+                 .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:
+                throw BalanceError.offline
+            case .timedOut:
+                throw BalanceError.timeout
+            case .cancelled:
+                throw BalanceError.cancelled
+            default:
+                throw BalanceError.network(error.code.rawValue)
+            }
+        } catch is CancellationError {
+            throw BalanceError.cancelled
         }
 
         guard let http = response as? HTTPURLResponse else { throw BalanceError.format }
