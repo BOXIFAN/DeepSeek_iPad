@@ -105,4 +105,4 @@
 
 ## 图标
 
-深蓝径向渐变底上的卡通蓝鲸（原创，不是官方 logo）。资源是单尺寸 1024 的 `AppIcon-1024.png`，放在 `Sources/Assets.xcassets/AppIcon.appiconset`，工程里 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。鲸鱼主体占画布约六成，深蓝底保证在浅色壁纸上也有轮廓；不要给图标加文字或描边。
+米白底 `#F4EEE4` 上的深墨剪影蓝鲸（原创，不是官方 logo）：单色剪影、负空间眼睛与鳍线、背上方三滴水花。资源是单尺寸 1024 的 `AppIcon-1024.png`，放在 `Sources/Assets.xcassets/AppIcon.appiconset`，工程里 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。鲸鱼主体占画布约七成，四周留白要够；不要给图标加文字、渐变或描边。
