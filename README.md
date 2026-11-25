@@ -1,6 +1,6 @@
 # iPad-DS
 
-Swift 原生 iPhone / iPad 通用 DeepSeek 客户端，自用。
+Swift 原生 iPhone / iPad 通用 DeepSeek 客户端，自用。App 显示名：**鲸语**。
 
 **接手先读 [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** —— 目标、进度、开发日志、下一步都在那份文件里。
 

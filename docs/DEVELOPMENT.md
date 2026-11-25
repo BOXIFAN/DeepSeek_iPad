@@ -12,6 +12,7 @@
 
 | 项 | 值 |
 |---|---|
+| App 显示名 | **鲸语**（bundle id 仍是 `com.ruakiu.ipadds`，改名不影响已存数据） |
 | 设备 | iPad Pro 13" (M4)、iPhone 16 Pro，均为 iOS 27 |
 | 分发范围 | 只自己用，不上架 |
 | 后端 | 没有。客户端直连 `api.deepseek.com` |
@@ -739,6 +740,23 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 **过程**：先试 GPT Image 2.6，代理不通（`[object Object]`）；切回本地 `moss-image-sft-8bit`。第一版是深蓝底彩色卡通鲸，用户给了剪影插画参考后改走单色剪影，第 4 版（身体流线、鳍全连体、无碎片）定稿。本地路径要设 `MOSS_MLX_CACHE` 到工作区，否则缓存写 `~/.cache` 被沙盒拒绝。候选图（悬浮卡 / 气泡波形 / 满版蓝底等 6 版）留在工作区 `icon-candidates/`，已 gitignore。
 
 **边界**：这是 AI 生成的原创卡通鲸鱼，不复制 DeepSeek 官方 logo；自用没问题，若以后要分发，图标与展示名都要换。
+
+### 2026-11-25 · 第 22 轮：改名「鲸语」
+
+**原因**：自制客户端叫 DeepSeek 容易被当成官方 App，也踩品牌红线。选定 **鲸语**：图标是鲸，产品是对话，两字在主屏放得下。
+
+**改动**
+
+| 位置 | 从 | 到 |
+|---|---|---|
+| `CFBundleDisplayName`（两套配置） | DeepSeek | 鲸语 |
+| 空态大标题 | DeepSeek | 鲸语 |
+| 顶栏空态标题 | DeepSeek | 鲸语 |
+| 输入框占位 | 给 DeepSeek 发消息 | 给鲸语发消息 |
+
+**没动的**：bundle id `com.ruakiu.ipadds`、target / scheme `iPadDS`、`DS_*` 调试钩子、所有 `api.deepseek.com` 与模型名引用、演示数据里的「DeepSeek 模型能力与价格」。bundle id 不变，真机上 Keychain 里的 Key 与 SwiftData 会话都保留，覆盖安装即生效。
+
+**验证**：`Info.plist` 的 `CFBundleDisplayName` 为「鲸语」；双端主屏显示「鲸语」+ 鲸鱼图标；App 内空态、顶栏、输入框文案都已切换；全套验收截图重跑。
 
 ---
 

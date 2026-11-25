@@ -217,7 +217,7 @@ private struct FloatingEmptyState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("DeepSeek")
+            Text("鲸语")
                 .font(.system(size: 34, weight: .semibold))
                 .padding(.bottom, 8)
 
@@ -343,7 +343,7 @@ struct FloatingComposer: View {
                 .accessibilityLabel("添加文件")
             }
 
-            TextField("给 DeepSeek 发消息", text: $text, axis: .vertical)
+            TextField("给鲸语发消息", text: $text, axis: .vertical)
                 .font(.system(size: 16))
                 .lineLimit(1...6)
                 .focused(focus)

@@ -105,4 +105,4 @@
 
 ## 图标
 
-米白底 `#F4EEE4` 上的深墨剪影蓝鲸（原创，不是官方 logo）：单色剪影、负空间眼睛与鳍线、背上方三滴水花。资源是单尺寸 1024 的 `AppIcon-1024.png`，放在 `Sources/Assets.xcassets/AppIcon.appiconset`，工程里 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。鲸鱼主体占画布约七成，四周留白要够；不要给图标加文字、渐变或描边。
+App 叫**鲸语**，图标是米白底 `#F4EEE4` 上的深墨剪影蓝鲸（原创，不是官方 logo）：单色剪影、负空间眼睛与鳍线、背上方三滴水花。资源是单尺寸 1024 的 `AppIcon-1024.png`，放在 `Sources/Assets.xcassets/AppIcon.appiconset`，工程里 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。鲸鱼主体占画布约七成，四周留白要够；不要给图标加文字、渐变或描边。

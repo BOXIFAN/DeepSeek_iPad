@@ -222,7 +222,7 @@ struct RootView: View {
     }
 
     private var headerTitle: String {
-        if chat.messages.isEmpty { return "DeepSeek" }
+        if chat.messages.isEmpty { return "鲸语" }
         if let generated = chat.generatedTitle, !generated.isEmpty {
             return generated
         }
