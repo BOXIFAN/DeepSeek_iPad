@@ -102,3 +102,7 @@
 - 不做纯装饰的渐变、光晕、玻璃叠层
 - 不放没有实现的按钮（图片上传、语音目前都不在界面上）
 - 不在画面上写「示例」「未接入」这类制作说明
+
+## 图标
+
+深蓝径向渐变底上的卡通蓝鲸（原创，不是官方 logo）。资源是单尺寸 1024 的 `AppIcon-1024.png`，放在 `Sources/Assets.xcassets/AppIcon.appiconset`，工程里 `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。鲸鱼主体占画布约六成，深蓝底保证在浅色壁纸上也有轮廓；不要给图标加文字或描边。

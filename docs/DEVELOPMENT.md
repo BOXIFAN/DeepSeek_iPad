@@ -59,6 +59,7 @@
 | 语音输入 / 朗读 | ❌ 未开始 | |
 | Mermaid 图表 | ❌ 未开始 | 计划 `WKWebView` + 本地 js |
 | 引用角标弹层 | ⚠️ 代码已写，未验证 | 模拟器点不了，需要真机或 UI 测试 |
+| App 图标 | ✅ 完成 | 深蓝底卡通蓝鲸，`Assets.xcassets/AppIcon` 单尺寸 1024；主屏 60/76pt 已验证 |
 | 真机签名 | ✅ 已完成 | 已装真机并实机测试；步骤见 `docs/DEVICE.md`，免费账号 7 天有效 |
 
 ### 2.1 传输链路已验证（mock + 实机），usage 字段待对真值
@@ -133,6 +134,7 @@ KeychainStore          API Key
 | `UI/Markdown/MarkdownParser.swift` | 块级 Markdown 解析 | 212 |
 | `UI/Markdown/SyntaxHighlighter.swift` | 正则语法高亮 | 86 |
 | `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 9 |
+| `Sources/Assets.xcassets/AppIcon.appiconset` | 1024 单尺寸 App 图标 | — |
 
 ### 三个必须知道的决策
 
@@ -729,6 +731,14 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 - 双端截图：`shots/redesign/{ipad,iphone}-{file,document}.png`
 
 **没验证到的**：真实 DeepSeek 解析（PDF 版式、扫描件文字识别、`rich_layout_recognition` 裁图效果）；headless 模拟器点不了文件选择器，选文件这一步只能在真机上走。
+
+### 2026-11-25 · 第 21 轮：App 图标
+
+**结果**：深蓝径向底 + 卡通蓝鲸（圆身体、白肚皮、腮红、头顶三滴水花），1024 单尺寸，接进 `Sources/Assets.xcassets/AppIcon.appiconset`，`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`。构建后 `Info.plist` 里 `CFBundleIcons` 已生成 `AppIcon60x60` / `AppIcon76x76`，iPad 与 iPhone 主屏缩到 60pt 仍能看清鲸鱼表情。
+
+**过程**：先试 GPT Image 2.6，代理不通（`[object Object]`）；切回本地 `moss-image-sft-8bit`，一次出图。本地路径要设 `MOSS_MLX_CACHE` 到工作区，否则缓存写 `~/.cache` 被沙盒拒绝。候选图（悬浮卡 / 气泡波形 / 满版蓝底等 6 版）留在工作区 `icon-candidates/`，已 gitignore。
+
+**边界**：这是 AI 生成的原创卡通鲸鱼，不复制 DeepSeek 官方 logo；自用没问题，若以后要分发，图标与展示名都要换。
 
 ---
 
