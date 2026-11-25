@@ -266,10 +266,13 @@ func toWireMessages(_ history: [Message]) -> [[String: Any]] {
 
 ### 5.3 附件
 
-- 图片：压到长边 1568px、JPEG 0.85，base64 内联进 `image` 块。单张控制在 1 MB 内，避免请求体过大。
-- 文档（PDF/DOCX/PPTX）：先 `POST /files` 拿 `file_id`，再在消息里用 `document` 块引用。上传接口同步返回，解析可能耗时数十秒，需要 loading 并放宽超时（上传 120s + 解析 120s）。
+- 图片：压到长边 1280px、JPEG 0.75，base64 内联进 `image` 块。单张控制在 600 KB 内，避免请求体过大。
+- 文档：先 `POST /files` 拿 `file_id`，再在消息里用 `document` 块引用（`source.type = "file"`）。上传接口同步解析，需要 loading 并放宽超时（上传 120s + 解析 120s）。
 - 注意 `purpose` 字段必须**放在 `file` 字段之前**，否则 400。
-- 纯文本/表格/电子书用 `purpose: user_data`，不计费。
+- `purpose` 三档（第 20 轮已落地）：PDF / Word / PPT 默认 `text_recognition`，可切 `rich_layout_recognition` 保留文档里的图；纯文本 / 代码 / CSV / JSON / XLSX / EPUB 用 `user_data`，不计费。
+- 请求体里出现 `document` 块就要带 `anthropic-beta: files-api-2025-04-14`，由 `ChatClient.needsFilesBeta` 自动判断。
+- 每轮最多 5 个文档（服务端上限 20、文字合计 8 MiB）；文件大小上限 PDF 100 MiB、文本 32 MiB。
+- 多轮里 `file_id` 的文档内容完整保留在上下文，删不掉也截不断；上下文超长时服务端返回 400。
 
 ### 5.4 会话标题
 

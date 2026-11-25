@@ -60,6 +60,13 @@ struct FloatingChatBody: View {
         HStack {
             Spacer(minLength: 56)
             VStack(alignment: .trailing, spacing: 6) {
+                if !message.documents.isEmpty {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        ForEach(message.documents) { document in
+                            MessageDocumentChip(document: document)
+                        }
+                    }
+                }
                 if !message.images.isEmpty {
                     imageGrid(message.images)
                 }
@@ -291,33 +298,57 @@ private struct FloatingEmptyState: View {
 struct FloatingComposer: View {
     @Binding var text: String
     var isStreaming: Bool
+    /// 有没有待发的图片 / 文件：分别决定左侧两个附件图标是否高亮
     var hasImages: Bool
+    var hasDocuments: Bool
+    /// 文档上传解析中：发送要等文件就绪
+    var isUploadingDocuments: Bool
+    /// 有文件上传失败：先重试或删掉
+    var hasFailedDocuments: Bool
     var focus: FocusState<Bool>.Binding
     var onSend: () -> Void
     var onStop: () -> Void
     var onPickImage: () -> Void
+    var onPickFile: () -> Void
+
+    private var hasAttachments: Bool { hasImages || hasDocuments }
 
     private var canSend: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasImages
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments
+    }
+
+    private var sendEnabled: Bool {
+        canSend && !isUploadingDocuments && !hasFailedDocuments
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            Button(action: onPickImage) {
-                Image(systemName: "photo")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(hasImages ? Theme.accent : Color.secondary)
-                    .frame(width: 32, height: 32)
+        HStack(alignment: .bottom, spacing: 8) {
+            HStack(spacing: 0) {
+                Button(action: onPickImage) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(hasImages ? Theme.accent : Color.secondary)
+                        .frame(width: 30, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("添加图片")
+
+                Button(action: onPickFile) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(hasDocuments ? Theme.accent : Color.secondary)
+                        .frame(width: 30, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("添加文件")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("添加图片")
 
             TextField("给 DeepSeek 发消息", text: $text, axis: .vertical)
                 .font(.system(size: 16))
                 .lineLimit(1...6)
                 .focused(focus)
                 .padding(.vertical, 7)
-                .padding(.leading, 18)
+                .padding(.leading, 6)
 
             Button {
                 if isStreaming {
@@ -333,8 +364,11 @@ struct FloatingComposer: View {
                     .background(Circle().fill(buttonColor))
             }
             .buttonStyle(.plain)
-            .disabled(!isStreaming && !canSend)
-            .accessibilityLabel(isStreaming ? "停止生成" : "发送")
+            .disabled(!isStreaming && !sendEnabled)
+            .accessibilityLabel(isStreaming
+                                ? "停止生成"
+                                : (isUploadingDocuments ? "等文件上传完成"
+                                   : (hasFailedDocuments ? "先处理上传失败的文件" : "发送")))
         }
         .padding(.trailing, 7)
         .padding(.vertical, 6)
@@ -352,7 +386,7 @@ struct FloatingComposer: View {
 
     private var buttonColor: Color {
         if isStreaming { return Color.secondary }
-        return canSend ? Theme.accent : Color.secondary.opacity(0.35)
+        return sendEnabled ? Theme.accent : Color.secondary.opacity(0.35)
     }
 }
 

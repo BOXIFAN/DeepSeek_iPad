@@ -22,11 +22,16 @@ struct RootView: View {
     @State private var showPhotoPicker = false
     @State private var imageProgress: (done: Int, total: Int)?
     @State private var draggingImageID: UUID?
+    @State private var pendingDocuments: [PendingDocument] = []
+    @State private var showFilePicker = false
+    @State private var documentProgress: (done: Int, total: Int)?
+    @State private var documentError: String?
     @State private var gallery: GalleryPresentation?
     @State private var windowWidth: CGFloat = 0
     @FocusState private var composerFocused: Bool
 
     @AppStorage("model") private var model = "deepseek-flash"
+    @AppStorage("keepDocumentLayout") private var keepDocumentLayout = false
     @AppStorage("systemPrompt") private var systemPrompt = ""
     @AppStorage(ThinkingEffort.storageKey) private var effortRaw = ThinkingEffort.standard.rawValue
     @AppStorage("defaultSearch") private var search = false
@@ -108,6 +113,13 @@ struct RootView: View {
         )
         .onChange(of: photoItems) { _, _ in
             loadPickedImages()
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: DocumentKind.allowedTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            handlePickedFiles(result)
         }
         .onChange(of: chat.isStreaming) { _, streaming in
             if !streaming {
@@ -313,6 +325,11 @@ struct RootView: View {
             }
             .frame(maxWidth: composerWidth)
 
+            if !pendingDocuments.isEmpty {
+                pendingDocumentArea
+                    .frame(maxWidth: composerWidth)
+            }
+
             if let progress = imageProgress {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -336,10 +353,14 @@ struct RootView: View {
                 text: $draft,
                 isStreaming: chat.isStreaming,
                 hasImages: !pendingImages.isEmpty,
+                hasDocuments: !pendingDocuments.isEmpty,
+                isUploadingDocuments: isUploadingDocuments,
+                hasFailedDocuments: pendingDocuments.contains(where: { $0.errorText != nil }),
                 focus: $composerFocused,
                 onSend: send,
                 onStop: chat.stop,
-                onPickImage: { showPhotoPicker = true }
+                onPickImage: { showPhotoPicker = true },
+                onPickFile: { showFilePicker = true }
             )
             .frame(maxWidth: composerWidth)
 
@@ -394,6 +415,76 @@ struct RootView: View {
             }
         }
         .animation(drawerAnimation, value: showHistory)
+    }
+
+    /// 有文档正在上传/解析，发送要等它们就绪。
+    private var isUploadingDocuments: Bool {
+        pendingDocuments.contains(where: \.isUploading)
+    }
+
+    /// 待发文件区：横向文件卡 + 解析方式开关 + 错误行。
+    private var pendingDocumentArea: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(pendingDocuments) { item in
+                        PendingDocumentChip(
+                            item: item,
+                            onRemove: { removeDocument(item.id) },
+                            onRetry: { retryDocument(item.id) }
+                        )
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+
+            if let progress = documentProgress, progress.total > 0 {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(progress.done == progress.total
+                         ? "正在等最后一个文件解析完…"
+                         : "正在上传 \(progress.done)/\(progress.total) 个文件…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            if pendingDocuments.contains(where: { $0.kind == .parsed }) {
+                Button {
+                    toggleDocumentLayout()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: keepDocumentLayout ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("保留文档里的图")
+                            .font(.system(size: 11.5))
+                        Text("图表会裁出来交给模型，按页计费更高")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    .foregroundStyle(keepDocumentLayout ? Theme.accent : Color.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let failure = pendingDocuments.compactMap(\.errorText).first {
+                Text("\(failure) · 点文件卡重试")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.orange)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let documentError {
+                Text(documentError)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.orange)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 
     /// 待发送图片的预览条。
@@ -569,8 +660,36 @@ struct RootView: View {
             balance.refreshIfStale(within: 5)
         }
 
+        if environment["DS_IMAGE_PROGRESS"] == "1" {
+            imageProgress = (1, 3)
+        }
+
+        if environment["DS_PENDING_IMAGE"] == "1",
+           let image = SelfTest.makeDemoImage() {
+            pendingImages = [image]
+        }
+
+        // 截图钩子：待发文件条的各状态
+        switch environment["DS_PENDING_DOCUMENT"] {
+        case "1":
+            pendingDocuments = [Self.demoPendingDocument(filename: "2026Q3-财报.pdf", phase: nil)]
+        case "failed":
+            pendingDocuments = [Self.demoPendingDocument(filename: "2026Q3-财报.pdf",
+                                                        phase: .failed("解析结果不完整，重试一次"))]
+        case "uploading":
+            pendingDocuments = [Self.demoPendingDocument(filename: "2026Q3-财报.pdf",
+                                                        phase: .uploading)]
+        case "multi":
+            pendingDocuments = [
+                Self.demoPendingDocument(filename: "2026Q3-财报.pdf", phase: nil),
+                Self.demoPendingDocument(filename: "合同扫描件.pdf", phase: .uploading)
+            ]
+        default:
+            break
+        }
+
         if environment["DS_DEMO_THREAD"] == "1" {
-            chat.loadDemoThread()
+            chat.loadDemoThread(includeDocument: environment["DS_DEMO_DOCUMENT"] == "1")
             return
         }
         if environment["DS_START_EMPTY"] != "1",
@@ -591,18 +710,21 @@ struct RootView: View {
             }
         }
 
-        if environment["DS_IMAGE_PROGRESS"] == "1" {
-            imageProgress = (1, 3)
-        }
-
-        if environment["DS_PENDING_IMAGE"] == "1",
-           let image = SelfTest.makeDemoImage() {
-            pendingImages = [image]
+        if let name = environment["DS_UPLOAD_FILE"], !name.isEmpty {
+            let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            if name == "demo", let demo = SelfTest.makeDemoPDF() {
+                let url = directory.appendingPathComponent(demo.filename)
+                try? demo.data.write(to: url)
+                ingestDocuments([url])
+            } else {
+                ingestDocuments([directory.appendingPathComponent(name)])
+            }
         }
 
         if let prompt = environment["DS_AUTO_PROMPT"],
            !prompt.isEmpty,
-           chat.messages.isEmpty {
+           chat.messages.isEmpty,
+           environment["DS_SEND_AFTER_UPLOAD"] != "1" {
             var images: [MessageImage] = []
             if environment["DS_DEMO_IMAGE"] == "1",
                let image = SelfTest.makeDemoImage() {
@@ -619,16 +741,181 @@ struct RootView: View {
         }
     }
 
+    private static func demoPendingDocument(filename: String,
+                                            phase: PendingDocument.Phase?) -> PendingDocument {
+        let document = MessageDocument(fileID: "file-api-demo",
+                                       filename: filename,
+                                       byteCount: 2_480_000,
+                                       purpose: .textRecognition)
+        return PendingDocument(filename: document.filename,
+                               byteCount: document.byteCount,
+                               kind: .parsed,
+                               purpose: document.purpose,
+                               data: Data(),
+                               phase: phase ?? .ready(document))
+    }
+
+    // MARK: - 文件
+
+    private func handlePickedFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            documentError = "选择文件失败：\(error.localizedDescription)"
+        case .success(let urls):
+            ingestDocuments(urls)
+        }
+    }
+
+    private func ingestDocuments(_ urls: [URL]) {
+        documentError = nil
+        let remaining = DocumentKind.maxPerMessage - pendingDocuments.count
+        guard remaining > 0 else {
+            documentError = "一轮最多 \(DocumentKind.maxPerMessage) 个文件"
+            return
+        }
+
+        var accepted: [PendingDocument] = []
+        for url in urls.prefix(remaining) {
+            let name = url.lastPathComponent
+            if DocumentKind.isImage(url) {
+                documentError = "图片请用左侧照片按钮"
+                continue
+            }
+            guard let kind = DocumentKind.kind(for: url) else {
+                documentError = DocumentError.unsupported(name).errorDescription
+                continue
+            }
+
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { url.stopAccessingSecurityScopedResource() }
+            }
+            guard let data = try? Data(contentsOf: url) else {
+                documentError = DocumentError.unreadable(name).errorDescription
+                continue
+            }
+            let limit = DocumentKind.maxBytes(for: kind)
+            guard data.count <= limit else {
+                documentError = DocumentError.tooLarge(name, limit).errorDescription
+                continue
+            }
+
+            accepted.append(PendingDocument(
+                filename: name,
+                byteCount: data.count,
+                kind: kind,
+                purpose: DocumentKind.purpose(for: kind, keepLayout: keepDocumentLayout),
+                data: data
+            ))
+        }
+
+        guard !accepted.isEmpty else { return }
+        pendingDocuments.append(contentsOf: accepted)
+        uploadDocuments(accepted.map(\.id))
+    }
+
+    /// 串行上传：进度好读，也避免同账号并发解析排队。
+    private func uploadDocuments(_ ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        documentError = nil
+        documentProgress = (0, ids.count)
+        Task {
+            var done = 0
+            for id in ids {
+                await uploadOne(id)
+                done += 1
+                documentProgress = (done, ids.count)
+            }
+            documentProgress = nil
+
+            // 验证钩子：文件就绪后自动带附件发一条
+            if ProcessInfo.processInfo.environment["DS_SEND_AFTER_UPLOAD"] == "1",
+               let prompt = ProcessInfo.processInfo.environment["DS_AUTO_PROMPT"],
+               !prompt.isEmpty,
+               draft.isEmpty {
+                draft = prompt
+                send()
+            }
+        }
+    }
+
+    @MainActor
+    private func uploadOne(_ id: UUID) async {
+        guard let index = pendingDocuments.firstIndex(where: { $0.id == id }) else { return }
+        let item = pendingDocuments[index]
+        guard let key = KeychainStore.read(), !key.isEmpty else {
+            pendingDocuments[index].phase = .failed("还没填 API Key")
+            return
+        }
+
+        do {
+            let document = try await FileUploader.shared.upload(
+                data: item.data,
+                filename: item.filename,
+                purpose: item.purpose,
+                apiKey: key
+            )
+            if let current = pendingDocuments.firstIndex(where: { $0.id == id }) {
+                pendingDocuments[current].phase = .ready(document)
+            }
+        } catch {
+            if let current = pendingDocuments.firstIndex(where: { $0.id == id }) {
+                pendingDocuments[current].phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func removeDocument(_ id: UUID) {
+        pendingDocuments.removeAll { $0.id == id }
+        if pendingDocuments.isEmpty {
+            documentProgress = nil
+        }
+    }
+
+    private func retryDocument(_ id: UUID) {
+        guard let index = pendingDocuments.firstIndex(where: { $0.id == id }) else { return }
+        pendingDocuments[index].phase = .uploading
+        uploadDocuments([id])
+    }
+
+    /// 切换「保留文档里的图」。purpose 在上传时定死，已经传过的 PDF / Word 要重传。
+    private func toggleDocumentLayout() {
+        keepDocumentLayout.toggle()
+        let newPurpose = DocumentKind.purpose(for: .parsed, keepLayout: keepDocumentLayout)
+        var reupload: [UUID] = []
+        for index in pendingDocuments.indices where pendingDocuments[index].kind == .parsed {
+            pendingDocuments[index].purpose = newPurpose
+            pendingDocuments[index].phase = .uploading
+            reupload.append(pendingDocuments[index].id)
+        }
+        uploadDocuments(reupload)
+    }
+
     private func send() {
+        guard !isUploadingDocuments else {
+            documentError = "文件还在上传，等一下就绪"
+            return
+        }
+        guard !pendingDocuments.contains(where: { $0.errorText != nil }) else {
+            documentError = "有文件没传成功，点文件重试或删掉再发"
+            return
+        }
+
+        let documents = pendingDocuments.compactMap(\.document)
         let text = draft
         let images = pendingImages
         draft = ""
         pendingImages = []
+        pendingDocuments = []
+        documentProgress = nil
+        documentError = nil
         composerFocused = false
-        sendText(text, images: images)
+        sendText(text, images: images, documents: documents)
     }
 
-    private func sendText(_ text: String, images: [MessageImage] = []) {
+    private func sendText(_ text: String,
+                          images: [MessageImage] = [],
+                          documents: [MessageDocument] = []) {
         let options = ChatClient.Options(
             model: model,
             thinking: effort.isEnabled,
@@ -636,7 +923,11 @@ struct RootView: View {
             webSearch: search,
             systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
         )
-        chat.send(text, images: images, apiKey: KeychainStore.read() ?? "", options: options)
+        chat.send(text,
+                  images: images,
+                  documents: documents,
+                  apiKey: KeychainStore.read() ?? "",
+                  options: options)
     }
 
     private func select(_ item: HistoryItem) {

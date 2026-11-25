@@ -17,6 +17,8 @@ final class ChatViewModel {
         var text: String
         /// 用户消息带的图片
         var images: [MessageImage] = []
+        /// 用户消息带的文档（`file_id` 引用）
+        var documents: [MessageDocument] = []
         /// 助手消息的内容块
         var blocks: [ContentBlock]
         var isStreaming = false
@@ -100,6 +102,7 @@ final class ChatViewModel {
                                       role: .user,
                                       text: stored.plainText,
                                       images: images,
+                                      documents: stored.documents,
                                       blocks: [])
             }
             return DisplayMessage(id: stored.id.uuidString,
@@ -118,7 +121,7 @@ final class ChatViewModel {
 
     /// 调试钩子：`DS_DEMO_THREAD=1` 时灌入一段示例对话，供命令行截图核对排版。
     /// 只在启动时调用，不写库。
-    func loadDemoThread() {
+    func loadDemoThread(includeDocument: Bool = false) {
         task?.cancel()
         task = nil
         roundID = UUID()
@@ -128,8 +131,9 @@ final class ChatViewModel {
         blockSignatures = [:]
         errorText = nil
         currentConversation = nil
-        generatedTitle = "DeepSeek 模型能力与价格"
-        conversationTitle = "DeepSeek 模型能力与价格"
+        let demoTitle = includeDocument ? "2026Q3 财报解读" : "DeepSeek 模型能力与价格"
+        generatedTitle = demoTitle
+        conversationTitle = demoTitle
         resetRoundMetrics()
         metrics = SessionMetrics(
             model: ModelCatalog.flash,
@@ -142,31 +146,50 @@ final class ChatViewModel {
                              thinkingTokens: 620),
             tokensPerSecond: 46
         )
+        let demos = includeDocument
+            ? [MessageDocument(fileID: "file-api-demo",
+                               filename: "2026Q3-财报.pdf",
+                               byteCount: 2_480_000,
+                               purpose: .textRecognition)]
+            : []
+        // 带文档的演示用一段短回复，保证附件卡和正文能在同一屏里截到
+        let assistantBlocks: [ContentBlock] = includeDocument
+            ? [.text(id: "demo-doc-text",
+                     text: "已收到这份财报。文档里提到营收 42.6 亿元、同比增长 18%，毛利率 51%。需要按分部拆开讲，还是先看现金流？",
+                     citations: [])]
+            : SampleData.assistantBlocks
         messages = [
             DisplayMessage(id: "demo-user-1",
                            role: .user,
-                           text: SampleData.userQuestion,
+                           text: includeDocument ? "总结这份财报的要点" : SampleData.userQuestion,
+                           images: [],
+                           documents: demos,
                            blocks: []),
             DisplayMessage(id: "demo-assistant-1",
                            role: .assistant,
                            text: "",
-                           blocks: SampleData.assistantBlocks)
+                           blocks: assistantBlocks)
         ]
     }
 
     // MARK: - 发送
 
-    func send(_ raw: String, images: [MessageImage] = [], apiKey: String, options: ChatClient.Options) {
+    func send(_ raw: String,
+              images: [MessageImage] = [],
+              documents: [MessageDocument] = [],
+              apiKey: String,
+              options: ChatClient.Options) {
         guard !isStreaming else { return }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !images.isEmpty else { return }
+        guard !text.isEmpty || !images.isEmpty || !documents.isEmpty else { return }
         guard !apiKey.isEmpty else {
             errorText = "还没填 API Key，先去设置里填一下"
             return
         }
 
-        // 图片在前、文字在后，模型先看图再读问题
-        var content: [[String: Any]] = images.map(\.blockJSON)
+        // 文档在前、图片在后、文字最后；模型先拿附件，再读问题
+        var content: [[String: Any]] = documents.map(\.blockJSON)
+        content += images.map(\.blockJSON)
         if !text.isEmpty {
             content.append(["type": "text", "text": text])
         }
@@ -177,11 +200,12 @@ final class ChatViewModel {
         if let conversation = currentConversation {
             // 首条用户消息顺便定标题，落库后重启才不会退回「新对话」
             let isFirstMessage = conversation.messages.isEmpty
-            let fallbackTitle = images.isEmpty ? String(text.prefix(24)) : "图片 · \(images.count) 张"
+            let fallbackTitle = Self.fallbackTitle(text: text, images: images, documents: documents)
             store.append(to: conversation,
                          role: "user",
                          blocks: content,
                          plainText: text,
+                         documents: documents,
                          autoTitle: isFirstMessage ? fallbackTitle : nil)
             conversationTitle = conversation.title
         }
@@ -190,6 +214,7 @@ final class ChatViewModel {
                                        role: .user,
                                        text: text,
                                        images: images,
+                                       documents: documents,
                                        blocks: []))
         history.append([
             "role": "user",
@@ -236,6 +261,16 @@ final class ChatViewModel {
             }
             self.finish(assistantID, roundID: round)
         }
+    }
+
+    /// 会话标题的本地兜底：有正文用正文，只有附件就用附件名。
+    private static func fallbackTitle(text: String,
+                                      images: [MessageImage],
+                                      documents: [MessageDocument]) -> String {
+        if !text.isEmpty { return String(text.prefix(24)) }
+        if let first = documents.first { return first.filename }
+        if !images.isEmpty { return "图片 · \(images.count) 张" }
+        return "新对话"
     }
 
     func stop() {

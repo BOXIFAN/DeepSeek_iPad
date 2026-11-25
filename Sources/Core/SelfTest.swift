@@ -237,6 +237,91 @@ enum SelfTest {
         check("Retry", "超时重试", BalanceRetryPolicy.isRetryable(BalanceError.timeout))
         check("Retry", "主动取消不重试", !BalanceRetryPolicy.isRetryable(BalanceError.cancelled))
 
+        // ---------- 文档 ----------
+
+        let pdfURL = URL(fileURLWithPath: "/tmp/report.pdf")
+        let mdURL = URL(fileURLWithPath: "/tmp/notes.md")
+        let swiftURL = URL(fileURLWithPath: "/tmp/main.swift")
+        let xlsxURL = URL(fileURLWithPath: "/tmp/budget.xlsx")
+        let pngURL = URL(fileURLWithPath: "/tmp/photo.png")
+        let zipURL = URL(fileURLWithPath: "/tmp/archive.zip")
+
+        check("文档", "PDF 走解析", DocumentKind.kind(for: pdfURL) == .parsed)
+        check("文档", "Markdown 走 user_data", DocumentKind.kind(for: mdURL) == .data)
+        check("文档", "代码文件走 user_data", DocumentKind.kind(for: swiftURL) == .data)
+        check("文档", "XLSX 走 user_data", DocumentKind.kind(for: xlsxURL) == .data)
+        check("文档", "图片不算文档", DocumentKind.kind(for: pngURL) == nil)
+        check("文档", "压缩包不支持", DocumentKind.kind(for: zipURL) == nil)
+
+        check("文档", "默认只解析文字",
+              DocumentKind.purpose(for: .parsed, keepLayout: false) == .textRecognition)
+        check("文档", "开关后图文混排",
+              DocumentKind.purpose(for: .parsed, keepLayout: true) == .richLayoutRecognition)
+        check("文档", "文本不受开关影响",
+              DocumentKind.purpose(for: .data, keepLayout: true) == .userData)
+        check("文档", "PDF 上限 100MiB",
+              DocumentKind.maxBytes(for: .parsed) == 100 * 1024 * 1024)
+        check("文档", "文本上限 32MiB",
+              DocumentKind.maxBytes(for: .data) == 32 * 1024 * 1024)
+
+        let boundary = "----test"
+        let multipart = FileUploader.multipartBody(
+            boundary: boundary,
+            filename: "报告.pdf",
+            purpose: .richLayoutRecognition,
+            data: Data("hello-doc".utf8)
+        )
+        let multipartText = String(decoding: multipart, as: UTF8.self)
+        let purposeIndex = multipartText.range(of: "name=\"purpose\"")
+        let fileIndex = multipartText.range(of: "name=\"file\"")
+        check("文档", "multipart 里 purpose 在 file 之前",
+              purposeIndex != nil && fileIndex != nil
+              && purposeIndex!.lowerBound < fileIndex!.lowerBound,
+              multipartText)
+        check("文档", "multipart 带文件名", multipartText.contains("filename=\"报告.pdf\""))
+        check("文档", "multipart 带正文", multipartText.contains("hello-doc"))
+        check("文档", "multipart 以 boundary 收尾", multipartText.hasSuffix("--\(boundary)--\r\n"))
+        check("文档", "purpose 值正确", multipartText.contains("rich_layout_recognition"))
+        check("文档", "文件名去掉引号与换行",
+              !FileUploader.safeFilename("a\"b\nc.pdf").contains("\""))
+
+        let document = MessageDocument(fileID: "file-api-1",
+                                       filename: "a.pdf",
+                                       byteCount: 1024,
+                                       purpose: .textRecognition)
+        let documentBlock = document.blockJSON
+        let documentSource = documentBlock["source"] as? [String: Any]
+        check("文档", "块类型是 document", documentBlock["type"] as? String == "document")
+        check("文档", "source 是 file", documentSource?["type"] as? String == "file")
+        check("文档", "file_id 正确", documentSource?["file_id"] as? String == "file-api-1")
+        check("文档", "尺寸文案非空", !document.sizeText.isEmpty)
+
+        let uploadJSON = #"{"id":"file-api-9","filename":"报表.pdf","bytes":2048,"purpose":"text_recognition"}"#
+        if let decoded = try? FileUploader.decode(Data(uploadJSON.utf8),
+                                                  fallbackFilename: "fallback.pdf",
+                                                  requestedPurpose: .userData) {
+            check("文档", "上传响应解析 id", decoded.fileID == "file-api-9")
+            check("文档", "上传响应解析文件名", decoded.filename == "报表.pdf")
+            check("文档", "上传响应解析大小", decoded.byteCount == 2048)
+            check("文档", "上传响应解析 purpose", decoded.purpose == .textRecognition)
+        } else {
+            check("文档", "上传响应可解析", false, "decode 抛错")
+        }
+        check("文档", "坏响应抛错",
+              (try? FileUploader.decode(Data("nope".utf8),
+                                        fallbackFilename: "x",
+                                        requestedPurpose: .userData)) == nil)
+
+        check("ChatClient", "含 document 块带 files beta",
+              ChatClient.needsFilesBeta(messages: [["role": "user", "content": [documentBlock]]]))
+        check("ChatClient", "纯文本消息不带 beta",
+              !ChatClient.needsFilesBeta(messages: [["role": "user",
+                                                    "content": [["type": "text", "text": "hi"]]]]))
+        check("ChatClient", "图片消息不带 beta",
+              !ChatClient.needsFilesBeta(messages: [["role": "user",
+                                                    "content": [["type": "image",
+                                                                 "source": ["type": "base64"]]]]]))
+
         // ---------- 图片 ----------
 
         if let demo = makeDemoImage() {
@@ -317,7 +402,11 @@ enum SelfTest {
                                         plainText: "回答",
                                         usage: Usage(inputTokens: 1_000,
                                                      outputTokens: 500,
-                                                     cacheReadTokens: 9_000))
+                                                     cacheReadTokens: 9_000),
+                                        documents: [MessageDocument(fileID: "file-api-1",
+                                                                    filename: "a.pdf",
+                                                                    byteCount: 1024,
+                                                                    purpose: .textRecognition)])
             message.conversation = conversation
             context.insert(message)
             try context.save()
@@ -337,12 +426,33 @@ enum SelfTest {
             results.append(Result(group: "持久化", name: "用量随消息落库",
                                   passed: messages.first?.usage?.totalInputTokens == 10_000,
                                   detail: "usage=\(String(describing: messages.first?.usage))"))
+            results.append(Result(group: "持久化", name: "附件元数据落库",
+                                  passed: messages.first?.documents.first?.fileID == "file-api-1",
+                                  detail: "documents=\(String(describing: messages.first?.documents))"))
 
             try? FileManager.default.removeItem(at: directory)
         } catch {
             results.append(Result(group: "持久化", name: "临时库可打开",
                                   passed: false, detail: "\(error)"))
         }
+    }
+
+    /// 生成一份最小 PDF，给端到端上传验证用（模拟器沙盒里 App 自己写，绕开宿主 cp 限制）。
+    static func makeDemoPDF() -> (filename: String, data: Data)? {
+        let pdf = """
+        %PDF-1.4
+        1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+        2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+        3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
+        4 0 obj<</Length 60>>stream
+        BT /F1 12 Tf 20 120 Td (iPadDS File Reading Test) Tj ET
+        endstream
+        endobj
+        5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
+        trailer<</Root 1 0 R>>
+        %%EOF
+        """
+        return ("ds-test-doc.pdf", Data(pdf.utf8))
     }
 
     /// 生成一张带文字的测试图，同时给自检和截图钩子用。

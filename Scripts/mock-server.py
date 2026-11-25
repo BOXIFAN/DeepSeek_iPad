@@ -7,20 +7,51 @@
 
 排障开关：
   MOCK_BALANCE_FAIL_TIMES=2  前两次余额请求回 503，用来验自动重试
+  MOCK_FILES_FAIL_TIMES=1    前几次文件上传回 503，用来验上传失败提示
   MOCK_DELAY=0.12            每个 SSE 事件之间的间隔，放慢流式便于截实时速度
 """
 import json
 import os
+import re
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8710
 FAIL_TIMES = int(os.environ.get("MOCK_BALANCE_FAIL_TIMES", "0"))
+FILES_FAIL_TIMES = int(os.environ.get("MOCK_FILES_FAIL_TIMES", "0"))
 DELAY = float(os.environ.get("MOCK_DELAY", "0.02"))
 REQ_DIR = "/tmp/mock-requests"
 os.makedirs(REQ_DIR, exist_ok=True)
-counter = {"n": 0, "balance_failures": 0}
+counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0}
+
+
+def parse_multipart(body, content_type):
+    """拆 multipart/form-data。够 mock 用：字段与文件各取一份。"""
+    match = re.search(r'boundary="?([^";]+)"?', content_type or "")
+    if not match:
+        return {}, {}
+    boundary = match.group(1).encode()
+    fields, files = {}, {}
+    for part in body.split(b"--" + boundary):
+        if part.startswith(b"\r\n"):
+            part = part[2:]
+        if not part or part == b"--" or part == b"--\r\n":
+            continue
+        head, _, payload = part.partition(b"\r\n\r\n")
+        header_text = head.decode("utf-8", "replace")
+        name_match = re.search(r'name="([^"]+)"', header_text)
+        if not name_match:
+            continue
+        name = name_match.group(1)
+        if payload.endswith(b"\r\n"):
+            payload = payload[:-2]
+        file_match = re.search(r'filename="([^"]*)"', header_text)
+        if file_match:
+            files[name] = (file_match.group(1), payload)
+        else:
+            fields[name] = payload.decode("utf-8", "replace")
+    return fields, files
 
 BALANCE = {
     "is_available": True,
@@ -96,9 +127,46 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    def send_json(self, status, payload):
+        body = json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_files(self, raw):
+        if counter["file_failures"] < FILES_FAIL_TIMES:
+            counter["file_failures"] += 1
+            self.send_json(503, {"error": {"message": "mock 解析服务繁忙"}})
+            return
+        fields, files = parse_multipart(raw, self.headers.get("Content-Type", ""))
+        filename, payload = files.get("file", ("file.bin", b""))
+        purpose = fields.get("purpose", "user_data")
+        counter["files"] += 1
+        file_id = f"file-api-mock{counter['files']:02d}"
+        os.makedirs("/tmp/mock-uploads", exist_ok=True)
+        safe = filename.replace("/", "_")
+        with open(os.path.join("/tmp/mock-uploads", f"{file_id}-{safe}"), "wb") as handle:
+            handle.write(payload)
+        sys.stderr.write(f"[mock] upload {filename} purpose={purpose} bytes={len(payload)}\n")
+        self.send_json(200, {
+            "id": file_id,
+            "object": "file",
+            "bytes": len(payload),
+            "created_at": int(time.time()),
+            "filename": filename,
+            "purpose": purpose,
+        })
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
+
+        if self.path.startswith("/files"):
+            self.handle_files(raw)
+            return
+
         counter["n"] += 1
         path = os.path.join(REQ_DIR, f"req-{counter['n']:02d}.json")
         with open(path, "wb") as handle:
@@ -109,6 +177,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self.path.startswith("/anthropic/v1/messages"):
             self.send_error(404)
             return
+
+        sys.stderr.write("[mock] messages beta=%s\n" % self.headers.get("anthropic-beta", "-"))
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

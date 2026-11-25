@@ -17,7 +17,7 @@
 | 后端 | 没有。客户端直连 `api.deepseek.com` |
 | API Key | 存本机 Keychain，不进代码、不进 git |
 | 最低部署目标 | iOS 18.0 |
-| 当前代码量 | 30 个 Swift 文件，6310 行（含 `Sources/Explore/` 的四套设计存档，正式代码约 4300 行） |
+| 当前代码量 | 38 个 Swift 文件，7615 行 |
 
 **不做的事**：多用户、云同步、账号体系、计费、上架审核相关内容。这些在"只自己用"的前提下都没有意义，加进来只会拖慢进度。
 
@@ -25,7 +25,7 @@
 
 ## 2. 当前状态
 
-一句话：**界面已按浮岛骨架重建，流式、持久化、余额与用量统计都在；实机已跑通，第 19 轮修了余额卡片的刷新调度，并加了剩余上下文 / 缓存命中 / tok/s 三项指标。**
+一句话：**界面已按浮岛骨架重建，流式、持久化、余额、用量统计与文件读取都在；实机已跑通，最近两轮补了余额刷新调度、三项用量指标和文件上传解析。**
 
 ### 功能矩阵
 
@@ -55,7 +55,7 @@
 | 会话用量 | ✅ 完成 · mock 验证 | 剩余上下文 / 缓存命中 / tok/s，输入条下方一行；点击看明细；随消息落库，切换会话能恢复 |
 | 新会话 / 切换会话 | ✅ 完成 | 新建、点选切换、滑动删除 |
 | 图片识别 | ✅ 完成 · 已验请求体 | 输入条选图（最多 4 张）、预览删除、气泡展示；压到 1280 长边 JPEG 0.75 后走 `image` 块 |
-| 文档上传（PDF/DOCX） | ❌ 未开始 | |
+| 文件读取 | ✅ 完成 · mock 已验证 | 文件入口选 PDF / Word / PPT / 文本 / 代码 / 表格 / 电子书，统一 `POST /files` 拿 `file_id`；`document` 块引用，自动带 `anthropic-beta`；上传失败可点卡片重试 |
 | 语音输入 / 朗读 | ❌ 未开始 | |
 | Mermaid 图表 | ❌ 未开始 | 计划 `WKWebView` + 本地 js |
 | 引用角标弹层 | ⚠️ 代码已写，未验证 | 模拟器点不了，需要真机或 UI 测试 |
@@ -101,9 +101,10 @@ KeychainStore          API Key
 | 路径 | 职责 | 行数 |
 |---|---|---|
 | `Sources/App/DSApp.swift` | 入口，调试钩子注入 Key | 19 |
-| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区与用量条排布 | 677 |
+| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区 / 用量条 / 待发文件条 | 975 |
 | `Core/Models/ContentBlock.swift` | 协议块模型 + `RenderBlock` 分组 | 166 |
 | `Core/Models/ContentBlock+Decode.swift` | 块字段解码 | 109 |
+| `Core/Models/MessageDocument.swift` | 文档模型、扩展名判定、`purpose` 选择、待发状态 | 187 |
 | `Core/Models/ModelCatalog.swift` | 模型上下文窗口表 | 31 |
 | `Core/Models/SessionMetrics.swift` | 会话用量（剩余上下文 / 缓存命中 / 速度）与格式化 | 102 |
 | `Core/Models/SampleData.swift` | 预览与截图用的样例回复 | 145 |
@@ -111,20 +112,22 @@ KeychainStore          API Key
 | `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、usage 解析、错误映射 | 388 |
 | `Core/Network/SSEParser.swift` | 按行攒事件 | 54 |
 | `Core/Network/BalanceClient.swift` | 余额查询（`Bearer` 鉴权）、网络错误分类 | 153 |
+| `Core/Network/FileUploader.swift` | multipart 上传（`purpose` 在 `file` 前）、错误映射 | 217 |
 | `Core/Storage/KeychainStore.swift` | Key 存取 | 61 |
-| `Core/Storage/ConversationStore.swift` | 会话增删查改 | 86 |
-| `Core/Storage/StoredModels.swift` | SwiftData 模型（`StoredMessage.usageJSON` 存每轮用量） | 87 |
+| `Core/Storage/ConversationStore.swift` | 会话增删查改 | 88 |
+| `Core/Storage/StoredModels.swift` | SwiftData 模型（`usageJSON` 存每轮用量、`attachmentsJSON` 存附件元数据） | 106 |
 | `Core/Storage/BalanceStore.swift` | 余额状态、周期刷新、退避重试、网络恢复补刷 | 278 |
 | `Core/Storage/BalanceRetryPolicy.swift` | 余额重试退避表与可重试判定 | 35 |
-| `Core/SelfTest.swift` | 离线自检（83 条） | 401 |
-| `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量（首 token 计时、实时速度） | 458 |
-| `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条、模式胶囊 | 498 |
+| `Core/SelfTest.swift` | 离线自检（113 条） | 511 |
+| `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量 + 附件进请求体 | 511 |
+| `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条（图片 + 文件入口）、模式胶囊 | 532 |
 | `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 204 |
 | `Features/Settings/SettingsView.swift` | 设置入口，导航到提示词与技能 | 179 |
 | `Features/Settings/SystemPromptView.swift` | 系统提示词编辑 | 49 |
 | `Features/Settings/SkillsView.swift` | 技能列表、导入、编辑 | 278 |
 | `UI/BalanceCard.swift` | 余额卡片、手机端胶囊、明细弹层 | 214 |
 | `UI/SessionMetricsBar.swift` | 会话指标条与用量明细弹层 | 244 |
+| `UI/DocumentChip.swift` | 已发送文件卡、待发文件卡（上传中 / 就绪 / 失败） | 143 |
 | `UI/Blocks/BlockView.swift` | 各内容块的视图 | 258 |
 | `UI/Markdown/MarkdownView.swift` | Markdown 渲染 + 代码块 + 表格（可选衬线排印） | 334 |
 | `UI/Markdown/MarkdownParser.swift` | 块级 Markdown 解析 | 212 |
@@ -167,6 +170,10 @@ KeychainStore          API Key
 | `DS_SHOW_HISTORY=1` | 启动直接拉出会话历史浮层 |
 | `DS_SHOW_BALANCE=1` | 启动直接打开余额明细 |
 | `DS_SHOW_USAGE=1` | 启动直接打开会话用量明细 |
+| `DS_PENDING_DOCUMENT=1|failed|uploading|multi` | 待发文件条的各种状态，截图用 |
+| `DS_DEMO_DOCUMENT=1` | 配合 `DS_DEMO_THREAD`，给演示对话挂一个文档附件 |
+| `DS_UPLOAD_FILE=demo|<文件名>` | 启动后把 Documents 里的文件（`demo` 为内置测试 PDF）走真实上传 |
+| `DS_SEND_AFTER_UPLOAD=1` | 文件就绪后自动带上附件发出 `DS_AUTO_PROMPT` |
 | `DS_START_EMPTY=1` | 不进任何会话，停在空态 |
 | `DS_DEMO_THREAD=1` | 灌入一段示例对话（`SampleData`），不写库 |
 | `DS_DEMO_HISTORY=1` | 历史浮层用五条演示条目，不动 SwiftData |
@@ -684,6 +691,45 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 
 **没验证到的**：真实 API 的 usage 字段口径（本地没有可用 Key，见 §2.1）；模拟器造不出「回后台再回前台」，`scenePhase` 那条路径只能真机确认。
 
+### 2026-11-25 · 第 20 轮：文件读取
+
+**做成了什么**
+
+输入条左侧新增回形针，选文件后自动上传拿 `file_id`，发送时以 `document` 块引用。PDF / Word / PowerPoint 走解析（默认 `text_recognition`，可切 `rich_layout_recognition` 保留文档里的图）；文本、代码、CSV / JSON、XLSX、EPUB 走 `user_data`，不计费。
+
+| 环节 | 实现 |
+|---|---|
+| 类型判定 | 扩展名白名单 + `UTType` 兜底；图片走原来的照片入口，压缩包等直接拒绝 |
+| 上传 | `POST /files`，手写 multipart，`purpose` 严格排在 `file` 之前；超时按上传 120s + 解析 120s 放宽到 180 / 300 |
+| 引用 | `{"type":"document","source":{"type":"file","file_id":…}}`；请求体出现 document 块就自动带 `anthropic-beta: files-api-2025-04-14` |
+| 待发状态 | 上传中 / 已就绪 / 失败三态；失败保留数据可点卡片重试；上传中与失败都禁用发送 |
+| 落库 | 协议块原样进 `blocksJSON`；文件名、大小、purpose 存 `StoredMessage.attachmentsJSON`，重启后气泡与附件卡都能恢复 |
+| 保留图 | 选完文件后出现开关，切换会对已解析的 PDF / Word 重传（purpose 在上传时定死） |
+
+**协议与限制**（来自官方文件解析 / Files API 文档）
+
+- 每轮最多 5 个文档（服务端上限 20、文档文字合计 8 MiB）。
+- 大小上限：PDF / 办公文档 100 MiB，文本 / 表格 / 电子书 32 MiB。
+- 上传即解析，解析成功才返回 `file_id`；失败的文档不保存不计费。
+- 多轮对话里 `file_id` 的文档内容完整保留在上下文，上下文超长时返回 400，不会静默截断。
+
+**踩的坑**
+
+- `fileImporter` 用 UTType 白名单会漏掉 `.swift`、`.md` 这类代码与笔记文件，干脆放开到 `.item`，选完再按扩展名过滤。
+- 附件元数据不能塞进协议块：原始块会原样回传，多出的字段可能被服务端拒。另开 `attachmentsJSON` 存展示信息。
+- 截图钩子原本写在 `DS_DEMO_THREAD` 的 `return` 之后，永远不执行；把待发附件钩子挪到 demo 分支之前。
+- 模拟器的 App 沙盒不允许从宿主 `cp` 文件进去，端到端验证改用内置测试 PDF，由 App 启动时写进自己的 Documents。
+
+**验证**
+
+- 自检 83 → 113 条：类型判定、purpose 选择、大小上限、multipart 字段顺序 / 文件名 / 正文 / boundary 收尾、document 块结构、上传响应解析、坏响应、beta 头判定、附件元数据落库
+- mock 端到端：上传 401 字节 PDF → `file-api-mock01` → 请求体 `document` 块 + `text` 块，mock 日志确认 `beta=files-api-2025-04-14`
+- 上传失败：mock 首次回 503，卡片显示「上传失败 · 点一下重试」，下方报「文档解析服务繁忙」，发送按钮变灰
+- 重启恢复：发完一轮杀进程再启动，气泡里的文件卡与指标都从库里恢复
+- 双端截图：`shots/redesign/{ipad,iphone}-{file,document}.png`
+
+**没验证到的**：真实 DeepSeek 解析（PDF 版式、扫描件文字识别、`rich_layout_recognition` 裁图效果）；headless 模拟器点不了文件选择器，选文件这一步只能在真机上走。
+
 ---
 
 ## 6. 下一步
@@ -692,8 +738,8 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 2. **真机确认前台恢复补刷**：模拟器造不出「回后台再回前台」，`scenePhase` 与网络恢复两条路径只能在真机上看。
 3. **真实数据下的渲染修整**：`ContentBlock.grouped` 每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块几千字展开会把正文顶出屏幕。
 4. **会话管理**：重命名、搜索。
-5. 图片上传（`deepseek-flash` 支持图像理解，走 `image` 内容块）
-6. 文档上传（`POST /files` 拿 `file_id`，注意 `purpose` 字段必须放在 `file` 之前）
+5. **真机跑一遍文件选择器**：headless 模拟器点不了 `fileImporter`，选 PDF、Word、代码文件各一次，看解析结果与计费。
+6. 图片上传（`deepseek-flash` 支持图像理解，走 `image` 内容块）
 7. 语音（ASR / TTS）
 8. Mermaid
 
@@ -707,7 +753,8 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 | 模拟器 headless | 点不了界面，交互验证靠环境变量或 UI 测试（需提权） | 尽量把状态做成可注入 |
 | App 进后台被挂起 | 长回复流会被切断 | 后续用 `beginBackgroundTask` 争取约 30s |
 | 用过联网工具的回复不能续写 | 「继续生成」要禁用 | 判断历史里有无工具块 |
-| 单条消息的 `file_id` 历史完整保留 | 长会话上下文膨胀 | 显示 token 占用，提示新建会话 |
+| 单条消息的 `file_id` 历史完整保留 | 长会话上下文膨胀（文档内容每轮都计入输入） | 指标条显示剩余上下文；每轮最多 5 个文档 |
+| 文档解析要等 | 大 PDF 上传 + 解析可能几十秒 | 待发卡显示上传中并禁用发送；401/402 之外失败可点卡重试 |
 | 免费 Apple ID 签名 7 天过期 | 真机隔周要重签 | 长期用建议 $99 账号 |
 
 ---

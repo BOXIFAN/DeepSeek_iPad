@@ -225,6 +225,21 @@ final class ChatClient {
         var systemPrompt: String? = nil
     }
 
+    /// 请求体里只要出现 `document` / `file` 块，就要带 Files API 的 beta 头。
+    /// 由客户端自动判断，调用方不用记这条规则。
+    static func needsFilesBeta(messages: [[String: Any]]) -> Bool {
+        for message in messages {
+            guard let content = message["content"] as? [[String: Any]] else { continue }
+            for block in content {
+                let type = block["type"] as? String
+                if type == "document" || type == "file" {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     /// - Parameter messages: 已经组装好的协议消息数组，`content` 保持原始块结构。
     func stream(apiKey: String,
                 messages: [[String: Any]],
@@ -239,6 +254,9 @@ final class ChatClient {
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "content-type")
                     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+                    if Self.needsFilesBeta(messages: messages) {
+                        request.setValue("files-api-2025-04-14", forHTTPHeaderField: "anthropic-beta")
+                    }
                     request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
                     let (bytes, response) = try await session.bytes(for: request)

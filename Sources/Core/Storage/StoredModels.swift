@@ -52,6 +52,9 @@ final class StoredMessage {
     /// 这一轮请求的用量（`Usage` 的 JSON）。可选：老库里的消息没这个字段，
     /// 读到 nil 就按「没有用量」处理，不影响历史回读。
     var usageJSON: String?
+    /// 用户消息的文档附件元数据。协议块里只有 `file_id`，文件名、大小这类展示信息存这里。
+    /// 与 `usageJSON` 一样是 Optional，老库读出来是 nil。
+    var attachmentsJSON: String?
 
     var conversation: StoredConversation?
 
@@ -60,7 +63,8 @@ final class StoredMessage {
          blocksJSON: Data,
          plainText: String,
          status: String = "complete",
-         usage: Usage? = nil) {
+         usage: Usage? = nil,
+         documents: [MessageDocument] = []) {
         self.id = UUID()
         self.order = order
         self.role = role
@@ -69,6 +73,7 @@ final class StoredMessage {
         self.status = status
         self.createdAt = Date()
         self.usageJSON = Self.encode(usage)
+        self.attachmentsJSON = Self.encode(documents)
     }
 
     var rawBlocks: [[String: Any]] {
@@ -80,8 +85,22 @@ final class StoredMessage {
         return try? JSONDecoder().decode(Usage.self, from: data)
     }
 
+    var documents: [MessageDocument] {
+        guard let attachmentsJSON,
+              let data = attachmentsJSON.data(using: .utf8),
+              let documents = try? JSONDecoder().decode([MessageDocument].self, from: data) else {
+            return []
+        }
+        return documents
+    }
+
     private static func encode(_ usage: Usage?) -> String? {
         guard let usage, let data = try? JSONEncoder().encode(usage) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func encode(_ documents: [MessageDocument]) -> String? {
+        guard !documents.isEmpty, let data = try? JSONEncoder().encode(documents) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 }
