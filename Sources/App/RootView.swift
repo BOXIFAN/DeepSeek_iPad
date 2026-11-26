@@ -32,6 +32,9 @@ struct RootView: View {
     @State private var documentError: String?
     @State private var gallery: GalleryPresentation?
     @State private var windowWidth: CGFloat = 0
+    @State private var memoryToast: String?
+    @State private var memoryDraft: MemoryDraft?
+    @State private var toastToken = UUID()
     @FocusState private var composerFocused: Bool
 
     @AppStorage("model") private var model = "deepseek-flash"
@@ -39,12 +42,16 @@ struct RootView: View {
     @AppStorage("systemPrompt") private var systemPrompt = ""
     @AppStorage(ThinkingEffort.storageKey) private var effortRaw = ThinkingEffort.standard.rawValue
     @AppStorage("defaultSearch") private var search = false
+    @AppStorage("memoryTools") private var memoryTools = true
 
     @Query(sort: \StoredConversation.updatedAt, order: .reverse)
     private var conversations: [StoredConversation]
 
     @Query(sort: \StoredSkill.createdAt, order: .forward)
     private var skills: [StoredSkill]
+
+    @Query(sort: \StoredMemory.createdAt, order: .forward)
+    private var memories: [StoredMemory]
 
     private var isRegular: Bool { sizeClass == .regular }
     private var effort: ThinkingEffort { ThinkingEffort(rawValue: effortRaw) ?? .standard }
@@ -65,7 +72,8 @@ struct RootView: View {
                     onOpenImage: { images, index in
                         gallery = GalleryPresentation(images: images, index: index)
                     },
-                    onRetry: retryLastRound
+                    onRetry: retryLastRound,
+                    onRemember: rememberFromMessage
                 )
                 .safeAreaInset(edge: .top, spacing: 0) {
                     topBar
@@ -85,9 +93,28 @@ struct RootView: View {
             }
         }
         .overlay { historyDrawer }
+        .overlay(alignment: .top) {
+            if let memoryToast {
+                Text(memoryToast)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06)))
+                    .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .sheet(isPresented: phoneHistoryBinding) { phoneHistorySheet }
         .sheet(isPresented: $showSettings) {
             SettingsView()
+        }
+        .sheet(item: $memoryDraft) { draft in
+            MemoryQuickAddSheet(initialContent: draft.content, initialTarget: draft.target)
         }
         .fullScreenCover(item: $gallery) { presentation in
             ImageGalleryView(images: presentation.images, initialIndex: presentation.index)
@@ -368,6 +395,13 @@ struct RootView: View {
     }
 
     // MARK: - 输入区
+
+    /// 「记住这条」打开编辑框时带的草稿。
+    struct MemoryDraft: Identifiable {
+        let id = UUID()
+        var content: String
+        var target: MemoryTarget
+    }
 
     private var composerWidth: CGFloat? {
         isRegular ? 640 : nil
@@ -745,9 +779,24 @@ struct RootView: View {
             try? context.save()
         }
 
+        if environment["DS_MEMORY_DEMO"] == "1" {
+            Self.seedDemoMemories()
+        }
+
+        // 调试钩子：预填一句「记住：……」，走真实的发送入口验显式记忆
+        if let command = environment["DS_MEMORY_CMD"], !command.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                draft = command
+                send()
+            }
+        }
+
         if environment["DS_PRINT_SYSTEM"] == "1" {
             let stored = (try? ConversationStore.shared.context.fetch(FetchDescriptor<StoredSkill>())) ?? []
-            let assembled = PromptComposer.system(defaultPrompt: systemPrompt, skills: stored) ?? "<nil>"
+            let storedMemories = MemoryStore.shared.all()
+            let assembled = PromptComposer.system(defaultPrompt: systemPrompt,
+                                                  skills: stored,
+                                                  memories: storedMemories) ?? "<nil>"
             // headless 模拟器拿不到 stdout，写到沙盒里方便脚本读
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("system-prompt.txt")
@@ -848,6 +897,25 @@ struct RootView: View {
                 startNew()
             }
         }
+    }
+
+    /// 截图与端到端验证用的样例记忆。只在库为空时灌，不覆盖真实数据。
+    static func seedDemoMemories() {
+        let store = MemoryStore.shared
+        guard store.count() == 0 else { return }
+        store.insertRaw("用户是昆士兰大学计算机科学专业学生，2026 年 12 月毕业",
+                        target: .user,
+                        importance: .critical)
+        store.insertRaw("写中文时不要用「不是……而是……」这类句式",
+                        target: .user,
+                        importance: .critical)
+        store.insertRaw("偏好先给数字和事实，再给判断",
+                        target: .user)
+        store.insertRaw("iPad-DS 用 Swift 原生，Key 存 Keychain，不做后端",
+                        target: .memory)
+        store.insertRaw("模拟器只能 headless 截图，构建走 ./Scripts/build.sh",
+                        target: .memory,
+                        importance: .low)
     }
 
     private static func demoPendingDocument(filename: String,
@@ -1010,6 +1078,17 @@ struct RootView: View {
             return
         }
 
+        if let payload = MemoryCommand.payload(draft) {
+            draft = ""
+            composerFocused = false
+            pendingImages = []
+            pendingDocuments = []
+            documentProgress = nil
+            documentError = nil
+            rememberFromCommand(payload)
+            return
+        }
+
         let documents = pendingDocuments.compactMap(\.document)
         let text = draft
         let images = pendingImages
@@ -1029,8 +1108,60 @@ struct RootView: View {
             thinkingEffort: effort.apiValue,
             webSearch: search,
             generateTitle: true,
-            systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
+            systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt,
+                                                skills: skills,
+                                                memories: memories),
+            memoryTools: memoryTools
         )
+    }
+
+    // MARK: - 记忆
+
+    /// 输入框里的「记住：……」：直接存一条，不发请求。
+    private func rememberFromCommand(_ payload: String) {
+        switch MemoryStore.shared.remember(payload, target: .user, source: "manual") {
+        case .saved:
+            showMemoryToast("已记住，记在「关于你」")
+        case .duplicate(let other):
+            showMemoryToast("已经记过了：\(other.trimmedContent)")
+        case .tooLong(let limit):
+            showMemoryToast("一条最多 \(limit) 字，拆成几条更稳")
+        case .full(let message):
+            showMemoryToast(message)
+        case .empty:
+            break
+        }
+    }
+
+    /// 消息底部的「记住」：把这条消息带进编辑框，用户改成一句话再存。
+    private func rememberFromMessage(_ message: ChatViewModel.DisplayMessage) {
+        let raw: String
+        if message.role == .user {
+            raw = message.text
+        } else {
+            raw = message.blocks.compactMap { block -> String? in
+                if case .text(_, let text, _) = block { return text }
+                return nil
+            }.joined(separator: "\n\n")
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        memoryDraft = MemoryDraft(content: String(trimmed.prefix(MemoryBudget.maxEntryLength)),
+                                  target: .user)
+    }
+
+    private func showMemoryToast(_ text: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.86)) {
+            memoryToast = text
+        }
+        let token = UUID()
+        toastToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) {
+            guard toastToken == token else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                memoryToast = nil
+            }
+        }
     }
 
     private func sendText(_ text: String,

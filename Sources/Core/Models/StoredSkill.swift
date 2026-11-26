@@ -93,8 +93,13 @@ enum SkillParser {
 
 enum PromptComposer {
 
-    /// 默认提示词在前，启用的技能按创建顺序在后，用分隔线隔开。
-    static func system(defaultPrompt: String, skills: [StoredSkill]) -> String? {
+    /// 默认提示词在前，启用的技能按创建顺序居中，长期记忆放最后。
+    ///
+    /// 记忆放在最末是有意的：它更新频率比提示词和技能高，放在结尾能让前面的内容
+    /// 保持稳定，服务端的上下文缓存至少能命中前缀。
+    static func system(defaultPrompt: String,
+                       skills: [StoredSkill],
+                       memories: [StoredMemory] = []) -> String? {
         var parts: [String] = []
 
         let base = defaultPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -108,12 +113,18 @@ enum PromptComposer {
             parts.append("# 技能：\(skill.name)\n\n\(body)")
         }
 
+        if let memorySection = MemoryComposer.section(memories) {
+            parts.append(memorySection)
+        }
+
         guard !parts.isEmpty else { return nil }
         return parts.joined(separator: "\n\n---\n\n")
     }
 
     /// 设置页里给一行摘要用。
-    static func characterCount(defaultPrompt: String, skills: [StoredSkill]) -> Int {
-        system(defaultPrompt: defaultPrompt, skills: skills)?.count ?? 0
+    static func characterCount(defaultPrompt: String,
+                               skills: [StoredSkill],
+                               memories: [StoredMemory] = []) -> Int {
+        system(defaultPrompt: defaultPrompt, skills: skills, memories: memories)?.count ?? 0
     }
 }

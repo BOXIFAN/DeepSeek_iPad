@@ -11,6 +11,8 @@
   MOCK_CHAT_FAIL_TIMES=1     前几次对话请求回 500，用来验消息重试
   MOCK_TRUNCATE_TIMES=1      前几次对话请求发一半就断开（无 message_stop），验断流提示
   MOCK_DELAY=0.12            每个 SSE 事件之间的间隔，放慢流式便于截实时速度
+  MOCK_MEMORY_TOOL=1         第一次请求回一段 tool_use（remember），
+                             收到 tool_result 后再回正常文本，用来验自动记忆整条链路
 """
 import json
 import os
@@ -25,6 +27,7 @@ FILES_FAIL_TIMES = int(os.environ.get("MOCK_FILES_FAIL_TIMES", "0"))
 CHAT_FAIL_TIMES = int(os.environ.get("MOCK_CHAT_FAIL_TIMES", "0"))
 TRUNCATE_TIMES = int(os.environ.get("MOCK_TRUNCATE_TIMES", "0"))
 DELAY = float(os.environ.get("MOCK_DELAY", "0.02"))
+MEMORY_TOOL = os.environ.get("MOCK_MEMORY_TOOL", "0") == "1"
 REQ_DIR = "/tmp/mock-requests"
 os.makedirs(REQ_DIR, exist_ok=True)
 counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0, "chat_failures": 0, "truncate": 0}
@@ -107,6 +110,70 @@ EVENTS += [
                                  "output_tokens_details": {"thinking_tokens": 28}}}),
     ("message_stop", {"type": "message_stop"}),
 ]
+
+
+# 自动记忆：模型先调 remember，客户端执行后回传 tool_result，再给最终回答
+MEMORY_EVENTS = [
+    ("message_start", {"type": "message_start",
+                       "message": {"id": "msg_mock_tool", "role": "assistant",
+                                   "model": "deepseek-flash",
+                                   "usage": {"input_tokens": 980,
+                                             "cache_read_input_tokens": 6400,
+                                             "cache_creation_input_tokens": 0,
+                                             "output_tokens": 1}}}),
+    ("content_block_start", {"type": "content_block_start", "index": 0,
+                             "content_block": {"type": "thinking", "thinking": ""}}),
+    ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                             "delta": {"type": "thinking_delta",
+                                       "thinking": "用户在说一条长期偏好，先记下来。"}}),
+    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    ("content_block_start", {"type": "content_block_start", "index": 1,
+                             "content_block": {"type": "tool_use", "id": "toolu_mock_1",
+                                               "name": "remember", "input": {}}}),
+    # 参数分两片下发，验证客户端的 input_json_delta 累积
+    ("content_block_delta", {"type": "content_block_delta", "index": 1,
+                             "delta": {"type": "input_json_delta",
+                                       "partial_json": "{\"content\":\"用户偏好先给数字"}}),
+    ("content_block_delta", {"type": "content_block_delta", "index": 1,
+                             "delta": {"type": "input_json_delta",
+                                       "partial_json": "和事实，再给判断\",\"target\":\"user\"}"}}),
+    ("content_block_stop", {"type": "content_block_stop", "index": 1}),
+    ("message_delta", {"type": "message_delta",
+                       "delta": {"stop_reason": "tool_use"},
+                       "usage": {"output_tokens": 32}}),
+    ("message_stop", {"type": "message_stop"}),
+]
+
+
+def last_user_has_tool_result(raw):
+    """判断这次请求是不是工具调用后的续轮。"""
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return False
+    for message in reversed(body.get("messages", [])):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            return any(isinstance(block, dict) and block.get("type") == "tool_result"
+                       for block in content)
+        return False
+    return False
+
+
+def tool_result_text(raw):
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return "-"
+    for message in reversed(body.get("messages", [])):
+        content = message.get("content")
+        if message.get("role") == "user" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    return str(block.get("content"))
+    return "-"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -196,13 +263,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+        events = EVENTS
+        if MEMORY_TOOL and not last_user_has_tool_result(raw):
+            events = MEMORY_EVENTS
+            sys.stderr.write("[mock] 回 tool_use（remember）\n")
+        elif MEMORY_TOOL:
+            sys.stderr.write("[mock] 收到 tool_result：%s\n" % tool_result_text(raw))
+
         truncate = counter["truncate"] < TRUNCATE_TIMES
         if truncate:
             counter["truncate"] += 1
             sys.stderr.write("[mock] truncate stream #%d\n" % counter["truncate"])
 
         try:
-            for index, (name, payload) in enumerate(EVENTS):
+            for index, (name, payload) in enumerate(events):
                 if truncate and index >= 6:
                     break
                 chunk = f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

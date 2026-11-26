@@ -11,6 +11,8 @@ struct FloatingChatBody: View {
     var onOpenImage: ([MessageImage], Int) -> Void
     /// 重试最后一轮（失败或被中断时出现）
     var onRetry: () -> Void
+    /// 把某条消息带进记忆编辑框
+    var onRemember: (ChatViewModel.DisplayMessage) -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -24,7 +26,9 @@ struct FloatingChatBody: View {
                         )
                     } else {
                         ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
-                            messageRow(message, isLast: index == viewModel.messages.count - 1)
+                            if !message.isToolResult {
+                                messageRow(message, isLast: index == viewModel.messages.count - 1)
+                            }
                         }
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -83,6 +87,13 @@ struct FloatingChatBody: View {
                             RoundedRectangle(cornerRadius: 22, style: .continuous)
                                 .fill(Color(uiColor: .secondarySystemBackground))
                         )
+                }
+            }
+            .contextMenu {
+                Button {
+                    onRemember(message)
+                } label: {
+                    Label("记住这条", systemImage: "brain")
                 }
             }
         }
@@ -160,7 +171,8 @@ struct FloatingChatBody: View {
                     .foregroundStyle(.orange)
             }
 
-            if !message.isStreaming && (!message.blocks.isEmpty || canRetry(message)) {
+            // 只有工具调用的消息不显示操作行：没有正文可复制，也没必要再「记住」
+            if !message.isStreaming && (hasCopyableText(message) || canRetry(message)) {
                 footerRow(message, isLast: isLast)
             }
         }
@@ -175,6 +187,12 @@ struct FloatingChatBody: View {
                 } label: {
                     Label("复制", systemImage: "doc.on.doc")
                 }
+            }
+
+            Button {
+                onRemember(message)
+            } label: {
+                Label("记住", systemImage: "brain")
             }
 
             if isLast && canRetry(message) {

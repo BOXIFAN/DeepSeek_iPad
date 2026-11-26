@@ -84,6 +84,63 @@ enum SelfTest {
               PromptComposer.characterCount(defaultPrompt: "你是助手", skills: [skillA, skillB, skillC]) == mixed.count,
               "count=\(PromptComposer.characterCount(defaultPrompt: "你是助手", skills: [skillA, skillB, skillC])) expected=\(mixed.count)")
 
+        // ---------- 长期记忆 ----------
+
+        let memUser = StoredMemory(content: "用户是昆士兰大学计算机科学学生",
+                                   target: .user,
+                                   importance: .critical)
+        let memWork = StoredMemory(content: "iPad-DS 不做后端", target: .memory)
+        let memOff = StoredMemory(content: "这条已经停用", target: .user, isEnabled: false)
+
+        let section = MemoryComposer.section([memUser, memWork, memOff]) ?? ""
+        check("Memory", "两栏都有标签",
+              section.contains("<memory target=\"user\">") && section.contains("<memory target=\"memory\">"),
+              "得到 \(section.prefix(60))")
+        check("Memory", "停用条目不注入", !section.contains("这条已经停用"))
+        check("Memory", "重要条目带标记", section.contains("[重要] 用户是昆士兰大学"))
+        check("Memory", "空记忆不产生段落", MemoryComposer.section([]) == nil)
+        check("Memory", "只有停用也返回 nil", MemoryComposer.section([memOff]) == nil)
+
+        let withMemory = PromptComposer.system(defaultPrompt: "你是助手",
+                                               skills: [skillA],
+                                               memories: [memUser]) ?? ""
+        check("Memory", "记忆排在技能之后",
+              withMemory.range(of: "甲指令")!.lowerBound < withMemory.range(of: "长期记忆")!.lowerBound)
+        check("Memory", "记忆段落参与 system 字数",
+              PromptComposer.characterCount(defaultPrompt: "你是助手",
+                                            skills: [skillA],
+                                            memories: [memUser]) == withMemory.count)
+
+        // 预算：100 条 × 101 字，肯定超过 6000
+        var many: [StoredMemory] = []
+        for index in 0..<100 {
+            many.append(StoredMemory(content: String(repeating: "字", count: 100) + "\(index)"))
+        }
+        let selection = MemoryComposer.select(many)
+        let selectedCharacters = selection.included.reduce(0) { $0 + $1.characterCount }
+        check("Memory", "预算内不超过 6000 字",
+              selectedCharacters <= MemoryBudget.maxCharacters,
+              "用掉 \(selectedCharacters)")
+        check("Memory", "超出预算的条目被记下来", !selection.omitted.isEmpty,
+              "omitted=\(selection.omitted.count)")
+        check("Memory", "条目数上限是 80",
+              MemoryBudget.usage(of: many).count == 100 && MemoryBudget.maxCount == 80)
+
+        // 去重
+        check("Memory", "相近句相似度高",
+              MemorySimilarity.score("用户喜欢先看数字", "用户喜欢先看数字和事实") >= 0.7)
+        check("Memory", "无关句不判重",
+              MemorySimilarity.duplicate(of: "今天武汉下雨", in: [memUser, memWork]) == nil)
+        check("Memory", "完全重复命中已有条目",
+              MemorySimilarity.duplicate(of: memUser.content, in: [memUser, memWork])?.id == memUser.id)
+
+        // 显式命令
+        check("Memory", "记住：解析出内容", MemoryCommand.payload("记住：我不吃香菜") == "我不吃香菜")
+        check("Memory", "半角冒号也认", MemoryCommand.payload("记住:用 Swift 写") == "用 Swift 写")
+        check("Memory", "没有冒号不触发", MemoryCommand.payload("记住这个方案") == nil)
+        check("Memory", "空内容不触发", MemoryCommand.payload("记住：") == nil)
+        check("Memory", "前后空白被去掉", MemoryCommand.payload("  记下： 一句话  ") == "一句话")
+
         // ---------- 请求体 ----------
 
         let messages: [[String: Any]] = [["role": "user", "content": [["type": "text", "text": "你好"]]]]
@@ -103,6 +160,47 @@ enum SelfTest {
         let noThinking = ChatClient.makeBody(messages: messages, options: .init(thinking: false))
         check("ChatClient", "关闭思考不带 thinking", noThinking["thinking"] == nil)
         check("ChatClient", "stream 恒为 true", withSystem["stream"] as? Bool == true)
+
+        // ---------- 客户端工具 ----------
+
+        let toolBody = ChatClient.makeBody(messages: messages, options: .init(memoryTools: true))
+        let tools = toolBody["tools"] as? [[String: Any]]
+        check("Tool", "带上 remember 工具", tools?.count == 1, "得到 \(tools?.count ?? -1)")
+        check("Tool", "客户端工具不带 type", tools?.first?["type"] == nil)
+        check("Tool", "工具名是 remember", tools?.first?["name"] as? String == "remember")
+        check("Tool", "input_schema 顶层是 object",
+              (tools?.first?["input_schema"] as? [String: Any])?["type"] as? String == "object")
+        check("Tool", "内容参数必填",
+              ((tools?.first?["input_schema"] as? [String: Any])?["required"] as? [String]) == ["content"])
+
+        let noTools = ChatClient.makeBody(messages: messages, options: .init())
+        check("Tool", "不开工具时不带 tools", noTools["tools"] == nil)
+
+        let mixedTools = ChatClient.makeBody(messages: messages,
+                                             options: .init(webSearch: true, memoryTools: true))
+        check("Tool", "联网与记忆共存",
+              (mixedTools["tools"] as? [[String: Any]])?.count == 3)
+
+        let toolRaw: [String: Any] = [
+            "type": "tool_use",
+            "id": "toolu_1",
+            "name": "remember",
+            "input": ["content": "用户喜欢先看数字", "target": "user"]
+        ]
+        if case .toolUse(let toolID, let toolName, let inputJSON)? = ContentBlock.make(from: toolRaw, id: "fallback") {
+            check("Tool", "tool_use 解出服务端 id", toolID == "toolu_1")
+            check("Tool", "tool_use 解出工具名", toolName == "remember")
+            check("Tool", "tool_use 保留原始参数",
+                  ContentBlock.memoryText(from: inputJSON) == "用户喜欢先看数字",
+                  "得到 \(inputJSON)")
+        } else {
+            check("Tool", "tool_use 能解码", false)
+        }
+
+        check("Tool", "从参数里取要展示的一句话",
+              ContentBlock.memoryText(from: #"{"content":"一句话"}"#) == "一句话")
+        check("Tool", "空 content 不展示",
+              ContentBlock.memoryText(from: #"{"content":"   "}"#) == nil)
 
         let maxEffort = ChatClient.makeBody(
             messages: messages,
@@ -382,7 +480,10 @@ enum SelfTest {
     /// 用临时目录单独开一个库，验证「写入 → 关掉 → 重新打开还能读到」。
     /// 不碰用户真实的会话库。
     private static func runPersistenceCheck(_ results: inout [Result]) {
-        let schema = Schema([StoredConversation.self, StoredMessage.self, StoredSkill.self])
+        let schema = Schema([StoredConversation.self,
+                             StoredMessage.self,
+                             StoredSkill.self,
+                             StoredMemory.self])
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("selftest-store-\(UUID().uuidString)")
         let storeURL = directory.appendingPathComponent("test.store")
@@ -394,6 +495,7 @@ enum SelfTest {
             let first = try ModelContainer(for: schema, configurations: config)
             let context = ModelContext(first)
             context.insert(StoredSkill(name: "持久化验证", summary: "", instructions: "指令正文"))
+            context.insert(StoredMemory(content: "记忆写入后重开还在", target: .memory))
 
             let conversation = StoredConversation(title: "验证会话", model: "deepseek-flash")
             context.insert(conversation)
@@ -420,6 +522,7 @@ enum SelfTest {
             let skills = try reopen.fetch(FetchDescriptor<StoredSkill>())
             let conversations = try reopen.fetch(FetchDescriptor<StoredConversation>())
             let messages = try reopen.fetch(FetchDescriptor<StoredMessage>())
+            let memories = try reopen.fetch(FetchDescriptor<StoredMemory>())
 
             results.append(Result(group: "持久化", name: "技能写入后重开还在",
                                   passed: skills.count == 1 && skills.first?.name == "持久化验证",
@@ -427,6 +530,11 @@ enum SelfTest {
             results.append(Result(group: "持久化", name: "会话写入后重开还在",
                                   passed: conversations.count == 1 && conversations.first?.title == "验证会话",
                                   detail: "conversations=\(conversations.count)"))
+            results.append(Result(group: "持久化", name: "记忆写入后重开还在",
+                                  passed: memories.count == 1
+                                        && memories.first?.content == "记忆写入后重开还在"
+                                        && memories.first?.target == .memory,
+                                  detail: "memories=\(memories.count)"))
             results.append(Result(group: "持久化", name: "用量随消息落库",
                                   passed: messages.first?.usage?.totalInputTokens == 10_000,
                                   detail: "usage=\(String(describing: messages.first?.usage))"))

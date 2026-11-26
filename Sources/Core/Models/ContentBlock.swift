@@ -77,6 +77,9 @@ enum ContentBlock: Identifiable, Sendable {
     case searchResults(id: String, toolUseID: String, kind: BlockKind, results: [SearchResult], errorCode: String?)
     case fetchedPage(id: String, toolUseID: String, kind: BlockKind, page: FetchedPage)
     case text(id: String, text: String, citations: [Citation])
+    /// 客户端工具调用（目前只有 `remember`）。`inputJSON` 是流式拼起来的原始参数，
+    /// 回传历史时必须原样送回去，所以不在这里解析成结构体。
+    case toolUse(id: String, name: String, inputJSON: String)
 
     var id: String {
         switch self {
@@ -85,6 +88,7 @@ enum ContentBlock: Identifiable, Sendable {
         case .searchResults(let id, _, _, _, _): return id
         case .fetchedPage(let id, _, _, _): return id
         case .text(let id, _, _): return id
+        case .toolUse(let id, _, _): return id
         }
     }
 }
@@ -101,6 +105,8 @@ enum RenderBlock: Identifiable {
     case search(id: String, queries: [String], results: [SearchResult]?, errorCode: String?)
     case fetchedPage(id: String, page: FetchedPage)
     case text(id: String, text: String, citations: [Citation])
+    /// 模型决定记一条记忆。展示成一行业务提示，不占正文位置。
+    case memory(id: String, text: String)
 
     var id: String {
         switch self {
@@ -108,6 +114,7 @@ enum RenderBlock: Identifiable {
         case .search(let id, _, _, _): return "search-\(id)"
         case .fetchedPage(let id, _): return "fetch-\(id)"
         case .text(let id, _, _): return "text-\(id)"
+        case .memory(let id, _): return "memory-\(id)"
         }
     }
 }
@@ -159,8 +166,24 @@ extension ContentBlock {
             case .text(let id, let text, let citations):
                 output.append(.text(id: id, text: text, citations: citations))
                 index += 1
+
+            case .toolUse(let id, _, let inputJSON):
+                // 认不出的客户端工具直接不展示，但块本身仍在，回传历史不受影响
+                if let text = Self.memoryText(from: inputJSON) {
+                    output.append(.memory(id: id, text: text))
+                }
+                index += 1
             }
         }
         return output
+    }
+
+    /// 从 `remember` 的参数里取要展示的那句话。
+    static func memoryText(from inputJSON: String) -> String? {
+        guard let data = inputJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = object["content"] as? String else { return nil }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

@@ -52,6 +52,20 @@ extension ContentBlock {
                                   results: results,
                                   errorCode: errorCode)
 
+        case "tool_use":
+            // 客户端工具：起始块里 input 是空对象，真正的参数由 input_json_delta 拼出来
+            let input = raw["input"] as? [String: Any] ?? [:]
+            let inputJSON: String
+            if let data = try? JSONSerialization.data(withJSONObject: input),
+               let text = String(data: data, encoding: .utf8) {
+                inputJSON = text
+            } else {
+                inputJSON = "{}"
+            }
+            return .toolUse(id: raw["id"] as? String ?? fallbackID,
+                            name: raw["name"] as? String ?? "",
+                            inputJSON: inputJSON)
+
         case "web_fetch_tool_result":
             let content = raw["content"] as? [String: Any]
             var page = FetchedPage(url: "", title: nil, publishedAt: nil, errorCode: nil)

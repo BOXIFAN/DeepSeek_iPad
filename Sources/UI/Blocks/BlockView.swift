@@ -17,7 +17,29 @@ struct BlockView: View {
 
         case .text(_, let text, let citations):
             MarkdownView(text: text, citations: citations)
+
+        case .memory(_, let text):
+            MemoryWriteRow(text: text)
         }
+    }
+}
+
+// MARK: - 记忆写入
+
+/// 模型自己调用 `remember` 时的一行提示，不占正文位置。
+struct MemoryWriteRow: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 5) {
+            Image(systemName: "brain")
+                .font(.system(size: 10, weight: .medium))
+            Text("记住：\(text)")
+                .font(.system(size: 11.5))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
     }
 }
 

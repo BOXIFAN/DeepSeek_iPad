@@ -10,9 +10,13 @@ struct SettingsView: View {
     @AppStorage(ThinkingEffort.storageKey) private var effortRaw = ThinkingEffort.standard.rawValue
     @AppStorage("defaultSearch") private var defaultSearch = false
     @AppStorage("systemPrompt") private var systemPrompt = ""
+    @AppStorage("memoryTools") private var memoryTools = true
 
     @Query(sort: \StoredSkill.createdAt, order: .forward)
     private var skills: [StoredSkill]
+
+    @Query(sort: \StoredMemory.createdAt, order: .forward)
+    private var memories: [StoredMemory]
 
     @State private var keyDraft = ""
     @State private var hasSavedKey = KeychainStore.hasAPIKey
@@ -22,6 +26,7 @@ struct SettingsView: View {
         switch ProcessInfo.processInfo.environment["DS_SETTINGS_PAGE"] {
         case "prompt": return [.prompt]
         case "skills": return [.skills]
+        case "memory": return [.memories]
         default: return []
         }
     }()
@@ -29,6 +34,7 @@ struct SettingsView: View {
     enum SettingsPage: Hashable {
         case prompt
         case skills
+        case memories
     }
 
     var body: some View {
@@ -37,6 +43,7 @@ struct SettingsView: View {
                 keySection
                 modelSection
                 toggleSection
+                memoryToggleSection
                 promptSection
 
                 if hasSavedKey {
@@ -57,6 +64,7 @@ struct SettingsView: View {
                 switch page {
                 case .prompt: SystemPromptView()
                 case .skills: SkillsView()
+                case .memories: MemoriesView()
                 }
             }
             .toolbar {
@@ -141,6 +149,16 @@ struct SettingsView: View {
         }
     }
 
+    private var memoryToggleSection: some View {
+        Section {
+            Toggle("让模型自己记", isOn: $memoryTools)
+        } header: {
+            Text("记忆")
+        } footer: {
+            Text("开启后，模型遇到值得跨对话保留的偏好、身份或项目事实，会调用 remember 工具写入。重复的不会写；遇到停止、失败或输出截断时不会续轮。")
+        }
+    }
+
     private var promptSection: some View {
         Section {
             NavigationLink(value: SettingsPage.prompt) {
@@ -149,10 +167,13 @@ struct SettingsView: View {
             NavigationLink(value: SettingsPage.skills) {
                 LabeledContent("技能", value: skillSummary)
             }
+            NavigationLink(value: SettingsPage.memories) {
+                LabeledContent("记忆", value: memorySummary)
+            }
         } header: {
             Text("提示词")
         } footer: {
-            Text("默认提示词与启用的技能会拼成 system，随每次请求发给模型。\(combinedSummary)")
+            Text("默认提示词、启用的技能与记忆会拼成 system，随每次请求发给模型。\(combinedSummary)")
         }
     }
 
@@ -163,12 +184,21 @@ struct SettingsView: View {
         return count == 0 ? "未设置" : "\(count) 字"
     }
 
-    /// 拼起来之后实际会发出去的字数，含技能标题与分隔线。
+    /// 拼起来之后实际会发出去的字数，含技能标题、记忆标签与分隔线。
     private var combinedSummary: String {
-        let combined = PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
+        let combined = PromptComposer.system(defaultPrompt: systemPrompt,
+                                             skills: skills,
+                                             memories: memories)
         let enabled = skills.filter(\.isEnabled).count
+        let enabledMemories = memories.filter(\.isEnabled).count
         guard let combined else { return " 现在没有内容会发送。" }
-        return " 当前共 \(combined.count) 字（默认提示词 + \(enabled) 个技能）。"
+        return " 当前共 \(combined.count) 字（默认提示词 + \(enabled) 个技能 + \(enabledMemories) 条记忆）。"
+    }
+
+    private var memorySummary: String {
+        let usage = MemoryBudget.usage(of: memories)
+        guard usage.count > 0 else { return "未设置" }
+        return "\(usage.count) 条 · \(usage.characters) 字"
     }
 
     private var skillSummary: String {

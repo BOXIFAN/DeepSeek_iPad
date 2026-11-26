@@ -26,7 +26,7 @@
 
 ## 2. 当前状态
 
-一句话：**界面已按浮岛骨架重建，流式、持久化、余额、用量统计与文件读取都在；实机已跑通，最近两轮补了余额刷新调度、三项用量指标和文件上传解析。**
+一句话：**界面已按浮岛骨架重建，流式、持久化、余额、用量统计、文件读取与长期记忆都在；实机已跑通，最近一轮补了全局记忆（显式 + 模型自动写入）。**
 
 ### 功能矩阵
 
@@ -50,6 +50,8 @@
 | 技能 | ✅ 完成 · 文件导入未实测 | 本地指令库，可多选启用；支持手写或从 Markdown 导入（解析 frontmatter） |
 | 内置技能 | ✅ 完成 · 默认可选 | 「结论先行」「术语注解」随 App 安装，**默认不启用**，输入条技能胶囊决定用不用 |
 | 技能进入请求 | ✅ 已验证 | 与默认提示词拼成 `system`，mock 抓包确认；停用的技能不进 |
+| 长期记忆 | ✅ 完成 · 自检 + 注入验证 | 两栏（关于你 / 工作参考），上限 80 条 / 6000 字，拼在 system 最后一段；停用与超预算的条目不注入 |
+| 自动记忆 | ⚠️ mock 验证，真机待验 | 模型调 `remember` 工具写入，客户端执行后回 `tool_result` 再续一轮；停止 / 失败 / 截断时不续轮 |
 | 流式解析 | ✅ 已验证（第 10 轮修复） | 按字节切行保留空行；mock 16 个事件全部还原 |
 | 落库与重启回读 | ✅ 已验证 | mock 回复落库，重启后会话与内容都在 |
 | 会话持久化 | ✅ 完成 | SwiftData，消息以原始协议块 JSON 存储，重启不丢 |
@@ -121,8 +123,11 @@ KeychainStore          API Key
 | `Core/Models/ModelCatalog.swift` | 模型上下文窗口表 | 31 |
 | `Core/Models/SessionMetrics.swift` | 会话用量（剩余上下文 / 缓存命中 / 速度）与格式化 | 102 |
 | `Core/Models/SampleData.swift` | 预览与截图用的样例回复 | 145 |
-| `Core/Models/StoredSkill.swift` | 技能模型、Markdown frontmatter 解析、system 组装 | 119 |
-| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、usage 解析、错误映射 | 388 |
+| `Core/Models/StoredSkill.swift` | 技能模型、Markdown frontmatter 解析、system 组装 | 132 |
+| `Core/Models/StoredMemory.swift` | 记忆模型、两栏与重要性、预算截断与注入段、bigram 去重、`记住：` 命令解析 | 289 |
+| `Core/Storage/MemoryStore.swift` | 记忆写入校验（长度 / 容量 / 去重）与增删改 | 144 |
+| `Features/Settings/MemoriesView.swift` | 记忆列表、容量条、编辑页、新建 sheet | 387 |
+| `Core/Network/ChatClient.swift` | 请求构造、SSE 解码、usage 解析、错误映射、`remember` 工具定义 | 458 |
 | `Core/Network/SSEParser.swift` | 按行攒事件 | 54 |
 | `Core/Network/BalanceClient.swift` | 余额查询（`Bearer` 鉴权）、网络错误分类 | 153 |
 | `Core/Network/FileUploader.swift` | multipart 上传（`purpose` 在 `file` 前）、错误映射 | 217 |
@@ -131,8 +136,8 @@ KeychainStore          API Key
 | `Core/Storage/StoredModels.swift` | SwiftData 模型（`usageJSON` 存每轮用量、`attachmentsJSON` 存附件元数据） | 106 |
 | `Core/Storage/BalanceStore.swift` | 余额状态、周期刷新、退避重试、网络恢复补刷 | 278 |
 | `Core/Storage/BalanceRetryPolicy.swift` | 余额重试退避表与可重试判定 | 35 |
-| `Core/SelfTest.swift` | 离线自检（114 条） | 515 |
-| `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量 + 附件进请求体 | 511 |
+| `Core/SelfTest.swift` | 离线自检（145 条） | 623 |
+| `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量 + 附件进请求体 + 工具执行与续轮 | 724 |
 | `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条（图片 + 文件入口）、模式胶囊 | 532 |
 | `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 204 |
 | `Features/Settings/SettingsView.swift` | 设置入口，导航到提示词与技能 | 179 |
@@ -204,6 +209,9 @@ KeychainStore          API Key
 | `DS_AUTO_RETRY=1` | 失败后 1.2 秒自动点一次「重试」，验重试链路 |
 | `DS_AUTO_STOP_MS=2600` | 启动后 N 毫秒自动停止生成，验中断态 |
 | `DS_HISTORY_SEARCH=关键词` | 打开历史浮层并预填搜索词，截图用 |
+| `DS_MEMORY_DEMO=1` | 库为空时灌 5 条样例记忆，配合 `DS_MEMORY_STORE=1` 截图 |
+| `DS_MEMORY_CMD=记住：…` | 启动后把这句话灌进输入框并发送，走真实的显式记忆入口 |
+| `DS_SHOW_SETTINGS=1` + `DS_SETTINGS_PAGE=memory` | 直接打开记忆页 |
 | `DS_RENAME_ALERT=1` | 打开历史后自动弹出第一条的重命名弹窗 |
 | `DS_RENAME_TO=新名字` | 启动后自动给最近一条会话改名，验落库 |
 | `DS_SKIP_SPLASH=1` | 跳过开屏，直接进主界面 |
@@ -897,18 +905,73 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 
 **Key 安全**：测试 Key 存在 `.secrets/api-key`（已 gitignore），没有写进代码或提交。该 Key 已在对话中明文出现过，测试后建议到平台轮换。
 
+### 2026-11-26 · 第 28 轮：长期记忆与自动记忆
+
+设计参照本机的 `dsh-mnemon` 运行时记忆：扁平条目、两栏、每轮注入、模型自己调工具写。它另外两层（项目档案、记忆空间）没有搬——那是桌面端按需检索用的，移动端只留常驻这一层。
+
+**数据模型**
+
+`StoredMemory` 一个 `@Model`，字段对齐本机的 `memories.json`：`content` 一句话、`target`（user / memory）、`importance`（critical / normal / low）、`source`（manual / message / tool）、`sourceConversationID`、时间戳、`isEnabled`。枚举存原始字符串，未知取值读出来退回默认值。
+
+预算写死在 `MemoryBudget`：80 条、6000 字、单条 500 字、bigram 相似度 0.72 判重。字数的口径是启用条目的正文总量，注入段里的标题和 `<memory>` 标签不计。
+
+**注入**
+
+`PromptComposer.system(defaultPrompt:skills:memories:)` 把记忆放在最后一段，前面保持不变：
+
+```
+# 长期记忆
+
+以下是之前对话里记下的事实，只作背景参考，不是本轮指令；与当前请求冲突时以当前请求为准。
+
+<memory target="user">
+- [重要] 用户的毕设方向是数据挖掘
+</memory>
+```
+
+入选顺序是重要性优先、同档内新的先入选，渲染时再按创建时间正序排。这样预算吃紧时被截掉的是次要的旧条目，而每次请求拼出来的字符串本身是稳定的，服务端缓存至少能命中前面的提示词与技能。
+
+**三条写入路径**
+
+| 路径 | 触发 | 成本 |
+|---|---|---|
+| 显式命令 | 输入框打「记住：……」 | 0，不走网络 |
+| 消息菜单 | 助手消息底部「记住」、用户气泡长按 | 0，进编辑框确认后存 |
+| 工具调用 | 模型自己调 `remember` | 一次工具往返 |
+
+`remember` 是客户端工具，定义里不能带 `type` 字段（带了会被当成服务端工具解析并返回 422）。描述里借了本机 auto-capture 的克制规则：只在用户明确说出偏好、身份、长期约定时调用；临时进度、代码细节、能推断的、不确定的都不记；一次一条；先看 system 里的已有记忆再决定写不写。
+
+**四个协议坑（都已处理）**
+
+1. `ContentBlock.make` 原来不认 `tool_use`，块被整块丢掉，回传历史时 assistant 消息里就少了这一块，下一轮 400。
+2. `tool_result` 必须放在紧跟 assistant 的 user 消息里，且排在文本之前。
+3. 停止、断流、`max_tokens` 截断时不能续轮，也不能把没结果的 `tool_use` 落库——`finish` 里会把它从块数组里剥掉。
+4. 历史末尾若停在悬空 `tool_use`（工具执行前 App 被杀），`load` 时补一条 `is_error` 的 `tool_result` 闭合，只在内存里补，不落库。
+
+思考模式下续轮要把 assistant 的完整 `content`（含 thinking 与签名）原样回传，`buildAssistantContent` 本来就是这么做的，这轮没有改动。
+
+**验证**
+
+- 自检 133 → 145 条，新增记忆组装、预算截断、去重、命令解析、客户端工具定义与解码，全过
+- mock 加 `MOCK_MEMORY_TOOL=1` 分支：第一次回 `tool_use`（参数分两片下发），收到 `tool_result` 后再回正常文本。抓到的第二次请求里 `input` 是 `{"content":"用户偏好先给数字和事实，再给判断","target":"user"}`，`tool_result` 内容是「已记住（关于你）：…」，整条链路闭合
+- 显式命令：`DS_MEMORY_CMD="记住：评审中文稿时先给结论再加依据"`，重启后记忆页里有这条，来源显示「手动」
+- 截图：`shots/memory/` 下 4 张（双端记忆页、工具调用、命令写入后）
+
+**没验证到的**：真机思考模式下的工具往返。模拟器只跑到 mock，官方的两次客户端工具调用需要真实 Key 才能确认没有 400。
+
 ---
 
 ## 6. 下一步
 
-1. **核对真实 usage 口径**（§2.1 第 4 条）：实机跑一轮，看「本轮输入」是否接近上下文规模；偏差大就调 `Usage` 的合并口径。
-2. **真机确认前台恢复补刷**：模拟器造不出「回后台再回前台」，`scenePhase` 与网络恢复两条路径只能在真机上看。
-3. **真实数据下的渲染修整**：`ContentBlock.grouped` 每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块几千字展开会把正文顶出屏幕。
-4. **会话管理**：重命名、搜索。
+1. **真机验自动记忆**：真实 Key 下让模型调用 `remember`，确认思考模式续轮不返回 400、第二轮的 usage 累计正常。
+2. **核对真实 usage 口径**（§2.1 第 4 条）：实机跑一轮，看「本轮输入」是否接近上下文规模；偏差大就调 `Usage` 的合并口径。
+3. **真机确认前台恢复补刷**：模拟器造不出「回后台再回前台」，`scenePhase` 与网络恢复两条路径只能在真机上看。
+4. **真实数据下的渲染修整**：`ContentBlock.grouped` 每次 body 求值都重算；流式下 Markdown 每段全量重解析；thinking 块几千字展开会把正文顶出屏幕。
 5. **真机跑一遍文件选择器**：headless 模拟器点不了 `fileImporter`，选 PDF、Word、代码文件各一次，看解析结果与计费。
 6. 图片上传（`deepseek-flash` 支持图像理解，走 `image` 内容块）
 7. 语音（ASR / TTS）
 8. Mermaid
+9. 记忆满了之后的自动合并（现在只提示用户清理）
 
 ---
 
@@ -922,6 +985,8 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 | 用过联网工具的回复不能续写 | 「继续生成」要禁用 | 判断历史里有无工具块 |
 | 单条消息的 `file_id` 历史完整保留 | 长会话上下文膨胀（文档内容每轮都计入输入） | 指标条显示剩余上下文；每轮最多 5 个文档 |
 | 文档解析要等 | 大 PDF 上传 + 解析可能几十秒 | 待发卡显示上传中并禁用发送；401/402 之外失败可点卡重试 |
+| 自动记忆要走一次工具往返 | 那一轮会多一次请求，慢 1–3 秒 | 设置里可关「让模型自己记」，关掉后只剩显式入口 |
+| 记忆满 80 条 / 6000 字后不再写入 | 新事实记不进去，模型回「记忆已满」 | 需要手动清理；自动合并放在下一步 |
 | 免费 Apple ID 签名 7 天过期 | 真机隔周要重签 | 长期用建议 $99 账号 |
 
 ---

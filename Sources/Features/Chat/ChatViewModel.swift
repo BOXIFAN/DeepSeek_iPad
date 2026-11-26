@@ -25,6 +25,8 @@ final class ChatViewModel {
         var isStreaming = false
         var errorText: String?
         var stopReason: String?
+        /// 工具结果的占位消息：协议里必须存在，界面上不显示
+        var isToolResult = false
     }
 
     private(set) var messages: [DisplayMessage] = []
@@ -52,6 +54,13 @@ final class ChatViewModel {
     private var blockTemplates: [Int: Data] = [:]
     /// signature_delta 累积
     private var blockSignatures: [Int: String] = [:]
+    /// tool_use 的 input_json_delta 累积，按内容块下标存
+    private var toolInputBuffers: [Int: String] = [:]
+    /// 本轮已经连续跑了几次工具调用，防止无限续轮
+    private var toolRoundDepth = 0
+    /// finish 里续轮要复用同一套 Key 与参数
+    private var lastAPIKey = ""
+    private var lastOptions = ChatClient.Options()
 
     // 一轮请求的计量状态
     private var roundUsage: Usage?
@@ -76,6 +85,8 @@ final class ChatViewModel {
         history = []
         blockTemplates = [:]
         blockSignatures = [:]
+        toolInputBuffers = [:]
+        toolRoundDepth = 0
         errorText = nil
         generatedTitle = nil
         currentConversation = nil
@@ -93,6 +104,8 @@ final class ChatViewModel {
         conversationTitle = conversation.title
         blockTemplates = [:]
         blockSignatures = [:]
+        toolInputBuffers = [:]
+        toolRoundDepth = 0
         errorText = nil
         generatedTitle = nil
         resetRoundMetrics()
@@ -120,6 +133,27 @@ final class ChatViewModel {
             guard !content.isEmpty else { return nil }
             return ["role": stored.role, "content": content]
         }
+        Self.repairDanglingToolUse(&history)
+    }
+
+    /// 历史末尾如果停在一个没有结果的 `tool_use`（工具执行前 App 被杀、数据库写了一半），
+    /// 下一次请求会被服务端判成非法。补一条失败结果把它闭合，且不落库。
+    private static func repairDanglingToolUse(_ history: inout [[String: Any]]) {
+        guard let last = history.last,
+              last["role"] as? String == "assistant",
+              let content = last["content"] as? [[String: Any]] else { return }
+
+        for block in content {
+            guard block["type"] as? String == "tool_use",
+                  let id = block["id"] as? String else { continue }
+            history.append(["role": "user", "content": [[
+                "type": "tool_result",
+                "tool_use_id": id,
+                "content": "这一轮没有执行完，结果缺失",
+                "is_error": true
+            ]]])
+            return
+        }
     }
 
     /// 调试钩子：`DS_DEMO_THREAD=1` 时灌入一段示例对话，供命令行截图核对排版。
@@ -132,6 +166,8 @@ final class ChatViewModel {
         history = []
         blockTemplates = [:]
         blockSignatures = [:]
+        toolInputBuffers = [:]
+        toolRoundDepth = 0
         errorText = nil
         currentConversation = nil
         let demoTitle = includeDocument ? "2026Q3 财报解读" : "DeepSeek 模型能力与价格"
@@ -183,6 +219,7 @@ final class ChatViewModel {
               apiKey: String,
               options: ChatClient.Options) {
         guard !isStreaming else { return }
+        toolRoundDepth = 0
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !images.isEmpty || !documents.isEmpty else { return }
         guard !apiKey.isEmpty else {
@@ -242,7 +279,8 @@ final class ChatViewModel {
     /// 重试最后一轮：丢掉失败的助手回复与它的历史 / 落库记录，用同一条用户消息重发。
     func retryLastRound(apiKey: String, options: ChatClient.Options) {
         guard canRetryLastRound else { return }
-        guard let user = messages.last(where: { $0.role == .user }) else { return }
+        guard let user = messages.last(where: { $0.role == .user && !$0.isToolResult }) else { return }
+        toolRoundDepth = 0
         guard !apiKey.isEmpty else {
             errorText = "还没填 API Key，先去设置里填一下"
             return
@@ -262,6 +300,8 @@ final class ChatViewModel {
 
     private func startRound(apiKey: String, options: ChatClient.Options) {
         beginBackgroundTask()
+        lastAPIKey = apiKey
+        lastOptions = options
         let assistantID = UUID().uuidString
         messages.append(DisplayMessage(id: assistantID, role: .assistant, text: "", blocks: [], isStreaming: true))
         isStreaming = true
@@ -354,7 +394,15 @@ final class ChatViewModel {
             }
 
         case .blockDelta(let index, let delta):
-            if case .signature(let chunk) = delta {
+            if case .toolInput(let fragment) = delta {
+                toolInputBuffers[index, default: ""] += fragment
+                let full = toolInputBuffers[index] ?? "{}"
+                update(messageID) { message in
+                    guard index < message.blocks.count,
+                          case .toolUse(let id, let name, _) = message.blocks[index] else { return }
+                    message.blocks[index] = .toolUse(id: id, name: name, inputJSON: full)
+                }
+            } else if case .signature(let chunk) = delta {
                 blockSignatures[index] = (blockSignatures[index] ?? "") + chunk
             } else {
                 noteProgress(delta)
@@ -411,6 +459,9 @@ final class ChatViewModel {
         case (.text(let id, let text, let citations), .citation(let citation)):
             return .text(id: id, text: text, citations: citations + [citation])
 
+        case (let block, .toolInput):
+            return block
+
         default:
             return block
         }
@@ -442,10 +493,24 @@ final class ChatViewModel {
         lastSpeedSampleAt = nil
 
         guard let last = messages.last(where: { $0.role == .assistant }) else { return }
-        let content = buildAssistantContent(from: last)
+
+        var content = buildAssistantContent(from: last)
+        let toolCall = Self.firstToolCall(in: content)
+        // 停止、失败、截断时不续轮；这时也不能把没结果的 tool_use 留在历史里，
+        // 下一次请求会因为「assistant 带 tool_use 但缺少 tool_result」被拒。
+        let willContinue = toolCall != nil
+            && last.errorText == nil
+            && last.stopReason != "stopped"
+            && last.stopReason != "max_tokens"
+            && toolRoundDepth < 2
+
+        if toolCall != nil, !willContinue {
+            content.removeAll { $0["type"] as? String == "tool_use" }
+        }
 
         blockTemplates.removeAll()
         blockSignatures.removeAll()
+        toolInputBuffers.removeAll()
 
         guard !content.isEmpty else {
             // 一个块都没收到：给明确的失败态，别让消息停在半空
@@ -477,6 +542,82 @@ final class ChatViewModel {
                          autoTitle: generatedTitle)
             conversationTitle = conversation.title
         }
+
+        guard let toolCall, willContinue else { return }
+
+        // 执行工具，把结果作为紧接着的 user 消息回传，再起一轮。
+        // 协议要求：assistant 带 tool_use 时，紧跟的 user 必须给齐全部 tool_result，
+        // 且 tool_result 块要排在文本之前。
+        let result = Self.performTool(toolCall, conversationID: currentConversation?.id)
+        let resultBlocks: [[String: Any]] = [[
+            "type": "tool_result",
+            "tool_use_id": toolCall.id,
+            "content": result
+        ]]
+        history.append(["role": "user", "content": resultBlocks])
+        messages.append(DisplayMessage(id: UUID().uuidString,
+                                       role: .user,
+                                       text: "",
+                                       blocks: [],
+                                       isToolResult: true))
+        if let conversation = currentConversation {
+            store.append(to: conversation,
+                         role: "user",
+                         blocks: resultBlocks,
+                         plainText: "")
+        }
+        toolRoundDepth += 1
+        startRound(apiKey: lastAPIKey, options: lastOptions)
+    }
+
+    /// 从已经合并好的块数组里取第一个工具调用；目前也只有 `remember` 一个工具。
+    /// 不能从展示块里取：展示块的 input 在流式过程中才逐步拼起来。
+    private static func firstToolCall(in content: [[String: Any]])
+        -> (id: String, name: String, inputJSON: String)? {
+        for block in content {
+            guard block["type"] as? String == "tool_use",
+                  let id = block["id"] as? String,
+                  let name = block["name"] as? String else { continue }
+            let input = block["input"] as? [String: Any] ?? [:]
+            let data = (try? JSONSerialization.data(withJSONObject: input)) ?? Data("{}".utf8)
+            return (id, name, String(data: data, encoding: .utf8) ?? "{}")
+        }
+        return nil
+    }
+
+    /// 执行客户端工具，返回给模型看的结果文本。
+    private static func performTool(_ call: (id: String, name: String, inputJSON: String),
+                                    conversationID: UUID?) -> String {
+        guard call.name == "remember" else {
+            return "未知工具，没有执行：\(call.name)"
+        }
+        guard let data = call.inputJSON.data(using: .utf8),
+              let input = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "参数不是合法 JSON，没有写入"
+        }
+        let content = (input["content"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !content.isEmpty else { return "参数里没有 content，没有写入" }
+
+        let target = MemoryTarget(rawValue: input["target"] as? String ?? "") ?? .user
+        let importance = MemoryImportance(rawValue: input["importance"] as? String ?? "") ?? .normal
+
+        switch MemoryStore.shared.remember(content,
+                                           target: target,
+                                           importance: importance,
+                                           source: "tool",
+                                           conversationID: conversationID) {
+        case .saved:
+            return "已记住（\(target.title)）：\(content)"
+        case .duplicate(let other):
+            return "已有相同记忆，没有重复写入：\(other.trimmedContent)"
+        case .tooLong(let limit):
+            return "内容超过 \(limit) 字，没有写入；请压缩成一句话。"
+        case .full(let message):
+            return "\(message)。请提醒用户先清理记忆。"
+        case .empty:
+            return "内容为空，没有写入。"
+        }
     }
 
     /// 用模板骨架 + 最终内容还原原始块数组。
@@ -499,6 +640,12 @@ final class ChatViewModel {
                     }
                 case .text(_, let text, _):
                     dict["text"] = text
+                case .toolUse:
+                    if let buffered = toolInputBuffers[index],
+                       !buffered.isEmpty,
+                       let parsed = try? JSONSerialization.jsonObject(with: Data(buffered.utf8)) {
+                        dict["input"] = parsed
+                    }
                 default:
                     break
                 }
@@ -554,7 +701,7 @@ final class ChatViewModel {
         switch delta {
         case .thinking(let text), .text(let text):
             count = text.count
-        case .signature, .citation:
+        case .signature, .citation, .toolInput:
             return
         }
         guard count > 0 else { return }

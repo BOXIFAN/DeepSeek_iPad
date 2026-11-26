@@ -100,6 +100,8 @@ enum BlockDelta: Sendable {
     case signature(String)
     case text(String)
     case citation(Citation)
+    /// 客户端工具的参数分片（`input_json_delta.partial_json`）
+    case toolInput(String)
 }
 
 // MARK: - 流事件
@@ -208,11 +210,16 @@ final class ChatClient {
            !systemPrompt.isEmpty {
             body["system"] = systemPrompt
         }
+        var tools: [[String: Any]] = []
+        if options.memoryTools {
+            tools.append(memoryTool)
+        }
         if options.webSearch {
-            body["tools"] = [
-                ["type": "deepseek_web_search", "name": "deepseek_web_search"],
-                ["type": "deepseek_read_url", "name": "deepseek_read_url"]
-            ]
+            tools.append(["type": "deepseek_web_search", "name": "deepseek_web_search"])
+            tools.append(["type": "deepseek_read_url", "name": "deepseek_read_url"])
+        }
+        if !tools.isEmpty {
+            body["tools"] = tools
         }
         return body
     }
@@ -227,7 +234,37 @@ final class ChatClient {
         var maxTokens = 32_768
         /// 默认系统提示词 + 已启用技能拼好的内容，nil 表示不发送 system
         var systemPrompt: String? = nil
+        /// 是否带上 `remember` 工具，让模型在对话里自己写记忆
+        var memoryTools = false
     }
+
+    /// 客户端工具：不能带 `type` 字段，带了会被当成服务端工具解析并返回 422。
+    static let memoryTool: [String: Any] = [
+        "name": "remember",
+        "description": """
+        把一条长期有效的事实写进用户的记忆库，之后每次对话都会带上。只在用户明确说出偏好、身份、        长期约定，或你确认了一个以后还会用到的项目事实时调用。临时任务进度、代码里的普通细节、        能从上下文推断的信息、你不确定的内容都不要记。一次只记一件事，用陈述句，不超过 200 字。        写入前先看 system 里的长期记忆段落，已经有的不要重复写。
+        """,
+        "input_schema": [
+            "type": "object",
+            "properties": [
+                "content": [
+                    "type": "string",
+                    "description": "一句话事实，陈述句，不超过 200 字"
+                ],
+                "target": [
+                    "type": "string",
+                    "enum": ["user", "memory"],
+                    "description": "user 放用户的身份与偏好；memory 放项目、环境与约定"
+                ],
+                "importance": [
+                    "type": "string",
+                    "enum": ["critical", "normal", "low"],
+                    "description": "用户明确要求永远或必须遵守的用 critical"
+                ]
+            ],
+            "required": ["content"]
+        ]
+    ]
 
     /// 请求体里只要出现 `document` / `file` 块，就要带 Files API 的 beta 头。
     /// 由客户端自动判断，调用方不用记这条规则。
@@ -393,6 +430,8 @@ final class ChatClient {
             return .signature(delta["signature"] as? String ?? "")
         case "text_delta":
             return .text(delta["text"] as? String ?? "")
+        case "input_json_delta":
+            return .toolInput(delta["partial_json"] as? String ?? "")
         case "citations_delta":
             guard let raw = delta["citation"] as? [String: Any] else { return nil }
             return .citation(Citation(
