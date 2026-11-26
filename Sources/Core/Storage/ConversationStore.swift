@@ -77,6 +77,15 @@ final class ConversationStore {
         return message
     }
 
+    /// 手动改名。置 `titleIsManual`，之后服务端再下发的标题不会覆盖它。
+    func rename(_ conversation: StoredConversation, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        conversation.title = String(trimmed.prefix(60))
+        conversation.titleIsManual = true
+        save()
+    }
+
     /// 删掉这个会话最后一条助手消息。重试失败/中断的那一轮时用，避免历史里留两条回复。
     func deleteLastAssistantMessage(in conversation: StoredConversation) {
         guard let last = conversation.messages

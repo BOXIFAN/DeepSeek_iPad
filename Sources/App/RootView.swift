@@ -17,6 +17,9 @@ struct RootView: View {
     @State private var showBalanceSheet = ProcessInfo.processInfo.environment["DS_SHOW_BALANCE"] == "1"
     @State private var showSessionStats = ProcessInfo.processInfo.environment["DS_SHOW_USAGE"] == "1"
     @State private var showSplash = ProcessInfo.processInfo.environment["DS_SKIP_SPLASH"] != "1"
+    @State private var historySearch = ""
+    @State private var renamingID: UUID?
+    @State private var renameDraft = ""
     @State private var draft = ""
     @State private var pendingImages: [MessageImage] = []
     @State private var photoItems: [PhotosPickerItem] = []
@@ -100,6 +103,13 @@ struct RootView: View {
         .sheet(isPresented: $showSessionStats) {
             SessionStatsSheet(metrics: chat.metrics,
                               liveTokensPerSecond: chat.liveTokensPerSecond)
+        }
+        .alert("重命名会话", isPresented: renameBinding) {
+            TextField("会话名称", text: $renameDraft)
+            Button("取消", role: .cancel) { renamingID = nil }
+            Button("保存") { commitRename() }
+        } message: {
+            Text("只改本机的显示名，不影响对话内容与服务端标题。")
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
@@ -281,19 +291,54 @@ struct RootView: View {
     // MARK: - 历史数据
 
     private var historyItems: [HistoryItem] {
+        let query = historySearch.trimmingCharacters(in: .whitespacesAndNewlines)
+
         if ProcessInfo.processInfo.environment["DS_DEMO_HISTORY"] == "1" {
-            return Self.demoHistory
+            let demo = Self.demoHistory
+            guard !query.isEmpty else { return demo }
+            return demo.filter {
+                $0.title.localizedCaseInsensitiveContains(query)
+                    || $0.preview.localizedCaseInsensitiveContains(query)
+            }
         }
-        return conversations.map { conversation in
+
+        let matched = query.isEmpty ? conversations : conversations.filter { conversation in
+            conversation.title.localizedCaseInsensitiveContains(query)
+                || conversation.sortedMessages.contains {
+                    $0.plainText.localizedCaseInsensitiveContains(query)
+                }
+        }
+
+        return matched.map { conversation in
             let preview = conversation.sortedMessages.last?.plainText ?? ""
+            // 标题命中就显示原来的预览；只有正文命中才换成命中的那句
+            let titleHit = query.isEmpty || conversation.title.localizedCaseInsensitiveContains(query)
             return HistoryItem(
                 id: conversation.id,
                 title: conversation.title,
                 preview: preview,
+                snippet: titleHit ? nil : Self.snippet(in: conversation, matching: query),
                 updatedAt: conversation.updatedAt,
                 isCurrent: conversation.id == selectedID
             )
         }
+    }
+
+    /// 搜索命中时截一段正文，标题对不上但正文命中的会话也能定位。
+    private static func snippet(in conversation: StoredConversation,
+                                matching query: String) -> String? {
+        for message in conversation.sortedMessages {
+            let text = message.plainText
+            guard let range = text.range(of: query, options: .caseInsensitive) else { continue }
+            let start = text.index(range.lowerBound, offsetBy: -16, limitedBy: text.startIndex) ?? text.startIndex
+            let end = text.index(range.upperBound, offsetBy: 36, limitedBy: text.endIndex) ?? text.endIndex
+            let prefix = start > text.startIndex ? "…" : ""
+            let suffix = end < text.endIndex ? "…" : ""
+            // 列表行只显示一行，片段里的换行会把命中的词顶到下一行
+            return (prefix + text[start..<end] + suffix)
+                .replacingOccurrences(of: "\n", with: " ")
+        }
+        return nil
     }
 
     private static var demoHistory: [HistoryItem] {
@@ -417,9 +462,11 @@ struct RootView: View {
 
                 HistoryPanel(
                     items: historyItems,
+                    searchText: $historySearch,
                     balance: balance,
                     onSelect: { select($0) },
                     onDelete: { delete($0) },
+                    onRename: { startRename($0) },
                     onNew: { startNew() },
                     onClose: { closeHistory() },
                     onSettings: {
@@ -626,9 +673,11 @@ struct RootView: View {
     private var phoneHistorySheet: some View {
         HistoryPanel(
             items: historyItems,
+            searchText: $historySearch,
             balance: balance,
             onSelect: { select($0) },
             onDelete: { delete($0) },
+            onRename: { startRename($0) },
             onNew: { startNew() },
             onClose: { showHistory = false },
             onSettings: {
@@ -651,10 +700,39 @@ struct RootView: View {
             SelfTest.writeReport()
         }
 
+        if let query = environment["DS_HISTORY_SEARCH"], !query.isEmpty {
+            // 截图钩子：预填搜索词
+            historySearch = query
+        }
+
+        // 截图钩子：直接弹出第一条的重命名弹窗
+        if environment["DS_RENAME_ALERT"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                if let first = historyItems.first {
+                    startRename(first)
+                }
+            }
+        }
+
+        // 端到端验证改名：给最近一条会话改名（不经过弹窗）
+        if let newName = environment["DS_RENAME_TO"], !newName.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if let conversation = conversations.first {
+                    ConversationStore.shared.rename(conversation, to: newName)
+                    if chat.currentConversation?.id == conversation.id {
+                        chat.applyManualTitle(newName)
+                    }
+                }
+            }
+        }
+
         if environment["DS_SHOW_HISTORY"] == "1" {
             // 延迟一下再打开，录像/连续截图才有机会抓到抽屉进入的过程
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                 openHistory()
+                if let query = environment["DS_HISTORY_SEARCH"], !query.isEmpty {
+                    historySearch = query
+                }
             }
         }
 
@@ -992,14 +1070,40 @@ struct RootView: View {
     }
 
     private func openHistory() {
+        historySearch = ""
         withAnimation(drawerAnimation) {
             showHistory = true
         }
     }
 
     private func closeHistory() {
+        historySearch = ""
         withAnimation(drawerAnimation) {
             showHistory = false
+        }
+    }
+
+    private var renameBinding: Binding<Bool> {
+        Binding(
+            get: { renamingID != nil },
+            set: { if !$0 { renamingID = nil } }
+        )
+    }
+
+    private func startRename(_ item: HistoryItem) {
+        renameDraft = item.title
+        renamingID = item.id
+    }
+
+    private func commitRename() {
+        guard let id = renamingID else { return }
+        let title = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { renamingID = nil }
+        guard !title.isEmpty,
+              let conversation = conversations.first(where: { $0.id == id }) else { return }
+        ConversationStore.shared.rename(conversation, to: title)
+        if chat.currentConversation?.id == id {
+            chat.applyManualTitle(title)
         }
     }
 

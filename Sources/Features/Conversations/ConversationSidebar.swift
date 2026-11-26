@@ -7,6 +7,8 @@ struct HistoryItem: Identifiable, Equatable {
     let id: UUID
     var title: String
     var preview: String
+    /// 搜索命中时给正文片段，优先于 preview 显示
+    var snippet: String?
     var updatedAt: Date
     var isCurrent: Bool = false
 }
@@ -17,9 +19,11 @@ struct HistoryItem: Identifiable, Equatable {
 /// iPad 用左侧抽屉，iPhone 用半屏 sheet，内容同一份。
 struct HistoryPanel: View {
     let items: [HistoryItem]
+    @Binding var searchText: String
     var balance: BalanceStore
     var onSelect: (HistoryItem) -> Void
     var onDelete: (HistoryItem) -> Void
+    var onRename: (HistoryItem) -> Void
     var onNew: () -> Void
     var onClose: () -> Void
     var onSettings: () -> Void
@@ -27,6 +31,7 @@ struct HistoryPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            searchBar
 
             if items.isEmpty {
                 emptyState
@@ -40,6 +45,26 @@ struct HistoryPanel: View {
                             .contentShape(Rectangle())
                             .onTapGesture { onSelect(item) }
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                Button(role: .destructive) {
+                                    onDelete(item)
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    onRename(item)
+                                } label: {
+                                    Label("重命名", systemImage: "pencil")
+                                }
+                                .tint(Theme.accent)
+                            }
+                            .contextMenu {
+                                Button {
+                                    onRename(item)
+                                } label: {
+                                    Label("重命名", systemImage: "pencil")
+                                }
                                 Button(role: .destructive) {
                                     onDelete(item)
                                 } label: {
@@ -89,12 +114,46 @@ struct HistoryPanel: View {
         .padding(.bottom, 8)
     }
 
+    private var searchBar: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+
+            TextField("搜索标题和正文", text: $searchText)
+                .font(.system(size: 12.5))
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.search)
+
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清空搜索")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(Color.primary.opacity(0.05))
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
     private var emptyState: some View {
         VStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.bubble.right")
+            Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
                 .font(.system(size: 22))
                 .foregroundStyle(.tertiary)
-            Text("还没有对话")
+            Text(searchText.isEmpty ? "还没有对话" : "没有匹配的会话")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
         }
@@ -113,7 +172,7 @@ struct HistoryPanel: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
-            Text(item.preview.isEmpty ? "空对话" : item.preview)
+            Text(item.snippet ?? (item.preview.isEmpty ? "空对话" : item.preview))
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

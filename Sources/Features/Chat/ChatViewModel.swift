@@ -224,6 +224,12 @@ final class ChatViewModel {
         startRound(apiKey: apiKey, options: options)
     }
 
+    /// 用户在历史浮层里改了当前会话的名字：顶栏立刻跟上，并让服务端标题失效。
+    func applyManualTitle(_ title: String) {
+        conversationTitle = title
+        generatedTitle = nil
+    }
+
     /// 这条助手回复能不能重试：失败或被中断，且确实是最后一条。
     var canRetryLastRound: Bool {
         guard !isStreaming, let last = messages.last, last.role == .assistant else { return false }
