@@ -22,14 +22,14 @@ struct SettingsView: View {
     @State private var hasSavedKey = KeychainStore.hasAPIKey
     @State private var justSaved = false
 
-    @State private var path: [SettingsPage] = {
-        switch ProcessInfo.processInfo.environment["DS_SETTINGS_PAGE"] {
-        case "prompt": return [.prompt]
-        case "skills": return [.skills]
-        case "memory": return [.memories]
-        default: return []
-        }
-    }()
+    @State private var path: [SettingsPage] = []
+
+    /// `DS_SETTINGS_PAGE` 只在启动后的第一次打开设置时生效，而且只给 5 秒窗口。
+    /// 之前写成 `@State` 的初值，sheet 每次重新出现都会重建，于是手动点开设置
+    /// 也总是落到记忆页。`nonisolated(unsafe)` 是为了放行 Swift 6 的并发检查：
+    /// 这两个值只在主线程的 onAppear 里访问。
+    nonisolated(unsafe) private static var didApplyLaunchPage = false
+    nonisolated(unsafe) private static let launchedAt = ProcessInfo.processInfo.systemUptime
 
     enum SettingsPage: Hashable {
         case prompt
@@ -59,6 +59,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
+        .onAppear(perform: applyLaunchPageIfNeeded)
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsPage.self) { page in
                 switch page {
@@ -72,6 +73,20 @@ struct SettingsView: View {
                     Button("完成") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// 调试钩子：启动时直接进某个子页，供 headless 截图用。
+    private func applyLaunchPageIfNeeded() {
+        guard !Self.didApplyLaunchPage else { return }
+        guard ProcessInfo.processInfo.systemUptime - Self.launchedAt < 5 else { return }
+        Self.didApplyLaunchPage = true
+
+        switch ProcessInfo.processInfo.environment["DS_SETTINGS_PAGE"] {
+        case "prompt": path = [.prompt]
+        case "skills": path = [.skills]
+        case "memory": path = [.memories]
+        default: break
         }
     }
 
