@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 @Observable
 @MainActor
@@ -60,6 +61,8 @@ final class ChatViewModel {
     private var streamedCharacters = 0
     /// 当前轮次的代次。流式中切会话/新建时换一个，旧任务的收尾就不能再改指标或落库。
     private var roundID = UUID()
+    /// 流式期间向系统申请的后台执行时间，切后台后还能再撑约 30 秒
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     // MARK: - 会话
 
@@ -258,6 +261,7 @@ final class ChatViewModel {
     }
 
     private func startRound(apiKey: String, options: ChatClient.Options) {
+        beginBackgroundTask()
         let assistantID = UUID().uuidString
         messages.append(DisplayMessage(id: assistantID, role: .assistant, text: "", blocks: [], isStreaming: true))
         isStreaming = true
@@ -277,6 +281,7 @@ final class ChatViewModel {
 
         task = Task { [weak self] in
             guard let self else { return }
+            defer { self.endBackgroundTask() }
             let started = Date()
             do {
                 for try await event in self.client.stream(apiKey: apiKey,
@@ -442,7 +447,18 @@ final class ChatViewModel {
         blockTemplates.removeAll()
         blockSignatures.removeAll()
 
-        guard !content.isEmpty else { return }
+        guard !content.isEmpty else {
+            // 一个块都没收到：给明确的失败态，别让消息停在半空
+            if last.stopReason != "stopped", last.errorText == nil {
+                let message = "没有收到任何内容，重试一次"
+                errorText = message
+                update(last.id) {
+                    $0.errorText = message
+                    $0.stopReason = "failed"
+                }
+            }
+            return
+        }
 
         history.append(["role": "assistant", "content": content])
 
@@ -506,6 +522,19 @@ final class ChatViewModel {
         lastSpeedSampleAt = nil
         streamedCharacters = 0
         liveTokensPerSecond = nil
+    }
+
+    private func beginBackgroundTask() {
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "chat-stream") { [weak self] in
+            Task { @MainActor in self?.endBackgroundTask() }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
     }
 
     /// 从落库的最近一轮用量恢复会话指标，切换历史会话时数字才不会归零。

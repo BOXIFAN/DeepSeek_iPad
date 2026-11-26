@@ -9,6 +9,7 @@
   MOCK_BALANCE_FAIL_TIMES=2  前两次余额请求回 503，用来验自动重试
   MOCK_FILES_FAIL_TIMES=1    前几次文件上传回 503，用来验上传失败提示
   MOCK_CHAT_FAIL_TIMES=1     前几次对话请求回 500，用来验消息重试
+  MOCK_TRUNCATE_TIMES=1      前几次对话请求发一半就断开（无 message_stop），验断流提示
   MOCK_DELAY=0.12            每个 SSE 事件之间的间隔，放慢流式便于截实时速度
 """
 import json
@@ -22,10 +23,11 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8710
 FAIL_TIMES = int(os.environ.get("MOCK_BALANCE_FAIL_TIMES", "0"))
 FILES_FAIL_TIMES = int(os.environ.get("MOCK_FILES_FAIL_TIMES", "0"))
 CHAT_FAIL_TIMES = int(os.environ.get("MOCK_CHAT_FAIL_TIMES", "0"))
+TRUNCATE_TIMES = int(os.environ.get("MOCK_TRUNCATE_TIMES", "0"))
 DELAY = float(os.environ.get("MOCK_DELAY", "0.02"))
 REQ_DIR = "/tmp/mock-requests"
 os.makedirs(REQ_DIR, exist_ok=True)
-counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0, "chat_failures": 0}
+counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0, "chat_failures": 0, "truncate": 0}
 
 
 def parse_multipart(body, content_type):
@@ -194,8 +196,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
 
+        truncate = counter["truncate"] < TRUNCATE_TIMES
+        if truncate:
+            counter["truncate"] += 1
+            sys.stderr.write("[mock] truncate stream #%d\n" % counter["truncate"])
+
         try:
-            for name, payload in EVENTS:
+            for index, (name, payload) in enumerate(EVENTS):
+                if truncate and index >= 6:
+                    break
                 chunk = f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 self.wfile.write(chunk.encode())
                 self.wfile.flush()

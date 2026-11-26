@@ -125,6 +125,8 @@ enum ChatError: LocalizedError {
     case http(Int, String)
     case format(String)
     case serverMessage(String)
+    /// 连接提前断开，没收到 message_stop
+    case incompleteStream
 
     var errorDescription: String? {
         switch self {
@@ -151,6 +153,8 @@ enum ChatError: LocalizedError {
             return "响应格式异常：\(message)"
         case .serverMessage(let message):
             return message
+        case .incompleteStream:
+            return "回复没有正常结束，可能中途断线；重试一次"
         }
     }
 }
@@ -166,7 +170,7 @@ final class ChatClient {
     init() {
         let config = URLSessionConfiguration.default
         // 首字节可能要等推理，给长一点；整条流的上限再放宽
-        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForRequest = 180
         config.timeoutIntervalForResource = 900
         config.waitsForConnectivity = true
         session = URLSession(configuration: config)
@@ -275,10 +279,12 @@ final class ChatClient {
                     var parser = SSEParser()
                     var lineBytes: [UInt8] = []
                     var started = false
+                    var sawMessageStop = false
 
                     func handle(_ line: String) {
                         guard let sse = parser.consume(line) else { return }
                         for event in Self.decode(sse) {
+                            if case .messageStop = event { sawMessageStop = true }
                             continuation.yield(event)
                         }
                     }
@@ -297,6 +303,13 @@ final class ChatClient {
                     }
                     if started, !lineBytes.isEmpty {
                         handle(String(decoding: lineBytes, as: UTF8.self))
+                    }
+
+                    // 连接提前断开时 URLSession 不报错，只是字节流结束。
+                    // 没有 message_stop 就说明这一轮没正常收完，当作中断处理，
+                    // 否则消息会静默停在半空（思考块有了、正文没有）。
+                    if !Task.isCancelled && !sawMessageStop {
+                        throw ChatError.incompleteStream
                     }
                     continuation.finish()
                 } catch is CancellationError {
