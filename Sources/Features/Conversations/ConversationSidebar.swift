@@ -45,18 +45,20 @@ struct HistoryPanel: View {
                             .contentShape(Rectangle())
                             .onTapGesture { onSelect(item) }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                // 数组第一个排在最右：删除靠边、红色，重命名在它左侧
+                                Button(role: .destructive) {
+                                    onDelete(item)
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
+                                .tint(.red)
+
                                 Button {
                                     onRename(item)
                                 } label: {
                                     Label("重命名", systemImage: "pencil")
                                 }
                                 .tint(Theme.accent)
-
-                                Button(role: .destructive) {
-                                    onDelete(item)
-                                } label: {
-                                    Label("删除", systemImage: "trash")
-                                }
                             }
                             .contextMenu {
                                 Button {
