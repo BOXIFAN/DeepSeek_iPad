@@ -959,6 +959,49 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 
 **没验证到的**：真机思考模式下的工具往返。模拟器只跑到 mock，官方的两次客户端工具调用需要真实 Key 才能确认没有 400。
 
+### 2026-11-26 · 第 29 轮：清理冗余截图并首次推送
+
+**删了什么**
+
+`shots/redesign/` 从 47 张减到 28 张，共 27 MB。规则是「每个功能保留一张代表图」，删掉的是重复状态、过程帧和失去参考价值的图。
+
+| 删除 | 体积 | 理由 |
+|---|---|---|
+| `icon-home-{ipad,iphone}.png` | 9.7 MB | 主屏图标验收，图标已定稿，日志里有文字记录 |
+| `ipad-real-{title,balance,verified}.png` | 3.6 MB | 真实 Key 验收的细项，`ipad-real-long.png` 已代表真实数据渲染 |
+| `{ipad,iphone}-splash{,-dark}.png` 三张 | 3.1 MB | 开屏双端 + 深色共四态，只留 `ipad-splash.png` |
+| `ipad-image-{pending,progress}.png` | 2.3 MB | 图片待发 / 进度过程态，`ipad-image.png` 与 `ipad-gallery.png` 覆盖结果 |
+| `ipad-history-opening.png` | 1.3 MB | 抽屉动画中间帧，结论（右边缘 x≈72pt）已写进第 12 轮日志 |
+| `ipad-search.png` | 1.4 MB | 与 `ipad-search-body.png` 同功能两态，留结果态 |
+| `ipad-skills-builtin.png` | 1.4 MB | 与 `ipad-skills.png` 同一页 |
+| `ipad-retry-stopped.png` | 1.2 MB | 与 `ipad-retry-failed.png` 同功能两态，留失败态 |
+| `ipad-rename-persist.png` | 1.2 MB | 与 `ipad-rename.png` 重复 |
+| `{iphone-chips,iphone-header-boundary}.png` | 1.9 MB | iPhone 顶栏细节的一次性验收 |
+| `{iphone-prompt,iphone-skills}.png` | 0.6 MB | 双端子页，留 iPad 侧 |
+
+**留下的结构**
+
+- `shots/redesign/` 28 张：双端 × 空态 / 对话 / 历史 / 余额 / 用量 / 文件 / 文档 / 设置 / 深色，加搜索、图片、图片全屏、重试、截断、开屏、重命名、真实数据各一张
+- `shots/memory/` 6 张：双端记忆页、工具调用、命令写入后、设置主页、真实 Key 自动记忆
+
+**失效的引用**
+
+下面几处日志里的路径随这次清理不再存在，结论仍然有效：
+
+- 第 12 轮：`shots/redesign/ipad-history-opening.png`
+- 第 13 轮：`shots/redesign/ipad-skills-builtin.png`
+- 第 15、16 轮：`shots/redesign/ipad-image-pending.png`
+- 第 17 轮：`shots/redesign/ipad-image-progress.png`
+- 第 23 轮：`{ipad,iphone}-splash{,-dark}.png` 现在只剩 `ipad-splash.png`
+
+**仓库体积**
+
+工作区从 68 MB 降到 39 MB。`.git` 仍有 151 MB——删除只影响工作区和后续提交，历史里的旧截图还在 pack 里。要真正瘦身得重写历史（`git filter-repo` 或 BFG），那会改写所有提交 hash，没做。
+
+**首次推送**
+
+前 14 个提交只在本地，这轮一起推到 `origin/main`。
+
 ---
 
 ## 6. 下一步
@@ -1004,7 +1047,7 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 | `Scripts/shot.sh` | 装 + 启动 + 截图 |
 | `Scripts/preview-shots.sh` | 浮岛骨架的全套验收图（空态/对话/历史/余额/设置/深色 × 双端） |
 | `explore/` | 四套界面方向的首屏、截图与对比页 |
-| `shots/` | 各阶段截图，文件名可读 |
+| `shots/` | 当前功能的验收截图；过程帧与重复态已清，历史图见 git 记录 |
 
 ## 9. 协作约定
 

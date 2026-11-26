@@ -47,6 +47,6 @@ Swift 原生 iPhone / iPad 通用 DeepSeek 客户端，自用。App 显示名：
 
 - **离线自检**：`DS_SELFTEST=1` 启动，结果在沙盒 `Documents/selftest.txt`，当前 145 条
 - **本地 mock**：`python3 Scripts/mock-server.py`，再带 `DS_API_BASE=http://127.0.0.1:8710` 启动，可离线跑通请求 → 流式 → 渲染 → 落库
-- **验收截图**：`shots/redesign/`，双端 × 空态 / 对话 / 历史 / 余额 / 用量 / 文件 / 文档 / 设置 / 技能 / 深色
+- **验收截图**：`shots/redesign/` 28 张（双端 × 空态 / 对话 / 历史 / 余额 / 用量 / 文件 / 文档 / 设置 / 深色，外加搜索、图片、重试、开屏、真实数据各一张），记忆功能单独在 `shots/memory/`
 
 模拟器 UDID：iPad Pro 13 M4 = `9C061938-493B-4BB4-BF5D-56EA001E774D`，iPhone 16 Pro = `F07ADD5C-2F69-4851-A64E-0A8358CA3F0D`。
