@@ -40,6 +40,7 @@ shoot() {
 for UDID in "$IPAD" "$IPHONE"; do
   PREFIX="ipad"; [ "$UDID" = "$IPHONE" ] && PREFIX="iphone"
 
+  shoot "$UDID" "$PREFIX-splash" SIMCTL_CHILD_DS_SPLASH_ALWAYS=1 SIMCTL_CHILD_DS_START_EMPTY=1
   shoot "$UDID" "$PREFIX-empty" SIMCTL_CHILD_DS_START_EMPTY=1
   shoot "$UDID" "$PREFIX-chat" SIMCTL_CHILD_DS_DEMO_THREAD=1
   shoot "$UDID" "$PREFIX-history" SIMCTL_CHILD_DS_DEMO_THREAD=1 SIMCTL_CHILD_DS_DEMO_HISTORY=1 SIMCTL_CHILD_DS_SHOW_HISTORY=1
@@ -54,5 +55,6 @@ for UDID in "$IPAD" "$IPHONE"; do
 
   xcrun simctl ui "$UDID" appearance dark
   shoot "$UDID" "$PREFIX-dark" SIMCTL_CHILD_DS_DEMO_THREAD=1
+  shoot "$UDID" "$PREFIX-splash-dark" SIMCTL_CHILD_DS_SPLASH_ALWAYS=1 SIMCTL_CHILD_DS_START_EMPTY=1
   xcrun simctl ui "$UDID" appearance light
 done

@@ -16,6 +16,7 @@ struct RootView: View {
     @State private var showSettings = ProcessInfo.processInfo.environment["DS_SHOW_SETTINGS"] == "1"
     @State private var showBalanceSheet = ProcessInfo.processInfo.environment["DS_SHOW_BALANCE"] == "1"
     @State private var showSessionStats = ProcessInfo.processInfo.environment["DS_SHOW_USAGE"] == "1"
+    @State private var showSplash = ProcessInfo.processInfo.environment["DS_SKIP_SPLASH"] != "1"
     @State private var draft = ""
     @State private var pendingImages: [MessageImage] = []
     @State private var photoItems: [PhotosPickerItem] = []
@@ -104,7 +105,15 @@ struct RootView: View {
         } action: { width in
             windowWidth = width
         }
-        .task { bootstrap() }
+        .task {
+            bootstrap()
+            // 开屏是唯一的长动效：固定展示约 1 秒再淡出，盖住首帧加载与布局
+            guard ProcessInfo.processInfo.environment["DS_SPLASH_ALWAYS"] != "1" else { return }
+            try? await Task.sleep(for: .milliseconds(950))
+            withAnimation(.easeInOut(duration: 0.32)) {
+                showSplash = false
+            }
+        }
         .photosPicker(
             isPresented: $showPhotoPicker,
             selection: $photoItems,
@@ -130,6 +139,13 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 balance.refreshIfStale(within: 30)
+            }
+        }
+        .overlay {
+            if showSplash {
+                SplashView()
+                    .transition(.opacity)
+                    .zIndex(100)
             }
         }
         .tint(Theme.accent)

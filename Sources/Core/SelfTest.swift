@@ -349,6 +349,10 @@ enum SelfTest {
             check("图片", "测试图能生成", false)
         }
 
+        // ---------- 开屏 ----------
+
+        check("开屏", "鲸鱼素材可加载", UIImage(named: "SplashWhale") != nil)
+
         // ---------- 内置技能 ----------
 
         let builtinNames = BuiltinSkills.all.map(\.name)

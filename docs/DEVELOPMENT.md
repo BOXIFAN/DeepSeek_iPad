@@ -18,7 +18,7 @@
 | 后端 | 没有。客户端直连 `api.deepseek.com` |
 | API Key | 存本机 Keychain，不进代码、不进 git |
 | 最低部署目标 | iOS 18.0 |
-| 当前代码量 | 38 个 Swift 文件，7615 行 |
+| 当前代码量 | 39 个 Swift 文件，7741 行 |
 
 **不做的事**：多用户、云同步、账号体系、计费、上架审核相关内容。这些在"只自己用"的前提下都没有意义，加进来只会拖慢进度。
 
@@ -103,7 +103,8 @@ KeychainStore          API Key
 | 路径 | 职责 | 行数 |
 |---|---|---|
 | `Sources/App/DSApp.swift` | 入口，调试钩子注入 Key | 19 |
-| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区 / 用量条 / 待发文件条 | 975 |
+| `Sources/App/SplashView.swift` | 开屏：鲸鱼游入、名字淡入、三个呼吸点 | 109 |
+| `Sources/App/RootView.swift` | 浮岛骨架：顶栏、历史浮层、余额卡位置、输入区 / 用量条 / 待发文件条、开屏退场 | 991 |
 | `Core/Models/ContentBlock.swift` | 协议块模型 + `RenderBlock` 分组 | 166 |
 | `Core/Models/ContentBlock+Decode.swift` | 块字段解码 | 109 |
 | `Core/Models/MessageDocument.swift` | 文档模型、扩展名判定、`purpose` 选择、待发状态 | 187 |
@@ -120,7 +121,7 @@ KeychainStore          API Key
 | `Core/Storage/StoredModels.swift` | SwiftData 模型（`usageJSON` 存每轮用量、`attachmentsJSON` 存附件元数据） | 106 |
 | `Core/Storage/BalanceStore.swift` | 余额状态、周期刷新、退避重试、网络恢复补刷 | 278 |
 | `Core/Storage/BalanceRetryPolicy.swift` | 余额重试退避表与可重试判定 | 35 |
-| `Core/SelfTest.swift` | 离线自检（113 条） | 511 |
+| `Core/SelfTest.swift` | 离线自检（114 条） | 515 |
 | `Features/Chat/ChatViewModel.swift` | 流式状态机 + 用量计量 + 附件进请求体 | 511 |
 | `Features/Chat/ChatView.swift` | 对话流、空态建议卡、悬浮输入条（图片 + 文件入口）、模式胶囊 | 532 |
 | `Features/Conversations/ConversationSidebar.swift` | 历史浮层，iPad 抽屉与 iPhone sheet 共用 | 204 |
@@ -136,6 +137,7 @@ KeychainStore          API Key
 | `UI/Markdown/SyntaxHighlighter.swift` | 正则语法高亮 | 86 |
 | `UI/Theme/Theme.swift` | 品牌色与正文宽度 | 9 |
 | `Sources/Assets.xcassets/AppIcon.appiconset` | 1024 单尺寸 App 图标 | — |
+| `Sources/Assets.xcassets/SplashWhale.imageset` | 从图标抠出的透明鲸鱼，template 渲染 | — |
 
 ### 三个必须知道的决策
 
@@ -188,6 +190,8 @@ KeychainStore          API Key
 | `DS_DEMO_IMAGE=1` | 配合 `DS_AUTO_PROMPT` 发一条带测试图的请求 |
 | `DS_PENDING_IMAGE=1` | 只在输入条挂一张待发图，不发送，截预览条用 |
 | `DS_SWITCH_DURING_STREAM=1` | 发完消息 1.2 秒后自动新建会话，验「流式中切会话不串台」 |
+| `DS_SPLASH_ALWAYS=1` | 开屏保持不退，截图用 |
+| `DS_SKIP_SPLASH=1` | 跳过开屏，直接进主界面 |
 | `DS_SHOW_GALLERY=1` | 直接打开全屏图片流（3 张测试图） |
 | `DS_IMAGE_PROGRESS=1` | 显示一个假的压缩进度条，截进度态用 |
 | `DS_PRINT_SYSTEM=1` | 把拼好的 system 写到沙盒 `Documents/system-prompt.txt` |
@@ -757,6 +761,32 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 **没动的**：bundle id `com.ruakiu.ipadds`、target / scheme `iPadDS`、`DS_*` 调试钩子、所有 `api.deepseek.com` 与模型名引用、演示数据里的「DeepSeek 模型能力与价格」。bundle id 不变，真机上 Keychain 里的 Key 与 SwiftData 会话都保留，覆盖安装即生效。
 
 **验证**：`Info.plist` 的 `CFBundleDisplayName` 为「鲸语」；双端主屏显示「鲸语」+ 鲸鱼图标；App 内空态、顶栏、输入框文案都已切换；全套验收截图重跑。
+
+### 2026-11-26 · 第 23 轮：开屏动画
+
+**分镜**（总长约 1.3 秒）
+
+| 时间 | 内容 |
+|---|---|
+| 0 ms | 鲸鱼在屏幕左侧外、缩放 0.92、透明 |
+| 0–550 ms | spring 游入到中心，透明度与缩放归位 |
+| 300 ms | 「鲸语」淡入并上移 8pt，三个品牌蓝小点同时出现 |
+| 620 ms | 鲸鱼开始 ±4pt 的缓慢浮动，点开始错峰呼吸 |
+| 950 ms | 开始 0.32 秒淡出，露出主界面 |
+
+**素材**：把 App 图标里的鲸鱼按背景色抠成透明 PNG（透明处正是眼睛、嘴线、腹部点这些负空间），三档 1x/2x/3x 放进 `SplashWhale.imageset`，`template-rendering-intent = template`。浅色用深墨 `#16233F`，深色用米白 `#F4EEE4`，都由 `.foregroundStyle` 染色。
+
+**踩的坑**：开屏一开始放在根 `ZStack` 里，结果被 `.overlay` 上的余额卡片盖住（iPad 左下角露出 ¥14.41）。改到视图链末尾的 `.overlay`，层级在所有浮层之上。
+
+**调试钩子**：`DS_SPLASH_ALWAYS=1` 保持不退（截图），`DS_SKIP_SPLASH=1` 直接跳过（自检/自动化）。
+
+**验证**
+
+- 自检 113 → 114 条（新增「鲸鱼素材可加载」）
+- 双端浅色 / 深色开屏截图：`shots/redesign/{ipad,iphone}-splash{,-dark}.png`
+- 正常启动 2.6 秒后已进主界面，确认自动退场
+
+**没验证到的**：真机上的实际帧率与启动时长——headless 模拟器只能截首尾帧，动画过程要看真机。
 
 ---
 
