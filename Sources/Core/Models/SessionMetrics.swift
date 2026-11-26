@@ -40,6 +40,13 @@ struct SessionMetrics: Equatable, Sendable {
         lastUsage?.cacheHitRate
     }
 
+    /// Anthropic 兼容接口目前不返回缓存命中量（实测恒为 0），
+    /// 只有真的拿到命中/写入数才在指标条上显示缓存项。
+    var hasCacheData: Bool {
+        guard let lastUsage else { return false }
+        return lastUsage.cacheReadTokens + lastUsage.cacheCreationTokens > 0
+    }
+
     var hasRoundUsage: Bool {
         guard let lastUsage else { return false }
         return lastUsage.totalTokens > 0
@@ -73,6 +80,8 @@ struct SessionMetrics: Equatable, Sendable {
         let value = max(count, 0)
         if value < 1_000 { return "\(value)" }
         if value < 1_000_000 {
+            // 999,600 这类值四舍五入后会变成「1000K」，直接进位到 1.0M
+            if value >= 999_500 { return "1.0M" }
             let k = Double(value) / 1_000
             return k < 10
                 ? String(format: "%.1fK", k)

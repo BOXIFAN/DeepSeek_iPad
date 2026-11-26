@@ -154,6 +154,12 @@ struct FloatingChatBody: View {
                 errorBanner(error)
             }
 
+            if message.stopReason == "max_tokens" {
+                Label("回答达到输出上限，已截断", systemImage: "scissors")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
+
             if !message.isStreaming && (!message.blocks.isEmpty || canRetry(message)) {
                 footerRow(message, isLast: isLast)
             }

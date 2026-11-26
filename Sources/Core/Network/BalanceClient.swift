@@ -25,7 +25,17 @@ struct BalanceSnapshot: Sendable, Equatable {
     var infos: [BalanceInfo]
     var fetchedAt: Date
 
-    var primary: BalanceInfo? { infos.first }
+    /// 官方会同时返回 USD 和 CNY 两条，金额为 0 的那条也照样返回。
+    /// 直接取第一条会把 `$0.00` 显示在卡片上，所以优先挑有余额的币种。
+    var primary: BalanceInfo? {
+        if let positive = infos.first(where: { $0.totalValue > 0 }) {
+            return positive
+        }
+        if let cny = infos.first(where: { $0.currency.uppercased() == "CNY" }) {
+            return cny
+        }
+        return infos.first
+    }
 }
 
 enum BalanceError: LocalizedError {

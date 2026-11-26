@@ -224,7 +224,7 @@ final class ChatClient {
         var thinkingEffort: String? = nil
         var webSearch = false
         var generateTitle = false
-        var maxTokens = 8192
+        var maxTokens = 32_768
         /// 默认系统提示词 + 已启用技能拼好的内容，nil 表示不发送 system
         var systemPrompt: String? = nil
     }

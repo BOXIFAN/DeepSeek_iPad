@@ -1028,6 +1028,7 @@ struct RootView: View {
             thinking: effort.isEnabled,
             thinkingEffort: effort.apiValue,
             webSearch: search,
+            generateTitle: true,
             systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
         )
     }

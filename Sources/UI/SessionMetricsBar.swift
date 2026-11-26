@@ -37,7 +37,7 @@ struct SessionMetricsBar: View {
                         .foregroundStyle(metrics.isNearLimit ? Color.orange : Color.secondary)
                 }
 
-                if let cache = SessionMetrics.cacheText(metrics.cacheHitRate) {
+                if metrics.hasCacheData, let cache = SessionMetrics.cacheText(metrics.cacheHitRate) {
                     divider
                     Text("缓存命中 \(cache)")
                 }
@@ -115,7 +115,7 @@ struct SessionStatsSheet: View {
 
             detailRows
 
-            Text("上下文占用 = 最近一轮请求的输入 + 输出。缓存命中与速度取最近一轮，速度按首个 token 到生成结束的耗时算。")
+            Text("上下文占用 = 最近一轮请求的输入 + 输出。缓存命中与速度取最近一轮；Anthropic 兼容接口暂不返回缓存命中量，服务端未提供时这一项不显示。")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)

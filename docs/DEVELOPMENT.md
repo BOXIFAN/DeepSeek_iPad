@@ -42,7 +42,8 @@
 | 请求构造与错误映射 | ✅ 已验证 | 401/402/429/400 有中文提示 |
 | 发送 / 停止 | ✅ 完成 | 流式中发送键变停止键 |
 | 消息重试 | ✅ 完成 · mock 验证 | 失败或被中断后，消息底部出现「重试」；丢掉失败的回复与落库记录，用同一条用户消息重发 |
-| 断流检测 / 后台执行 | ✅ 完成 · mock 验证 | 没收到 `message_stop` 判为断流，明确提示并可重试；流式期间申请约 30 秒后台执行；首字节超时 120 → 180 秒 |
+| 断流检测 / 后台执行 | ✅ 完成 · mock + 真实 Key 验证 | 没收到 `message_stop` 判为断流，明确提示并可重试；流式期间申请约 30 秒后台执行；首字节超时 180 秒 |
+| 服务端会话标题 | ✅ 完成 · 真实 Key 验证 | 请求带 `title.enabled`，`message_delta` 返回标题后写入会话；手动改过名的不覆盖 |
 | 设置页 | ✅ 完成 | Key、默认模型、两个默认开关、系统提示词、技能 |
 | 系统提示词 | ✅ 完成 | 设置里一段全局 system，随每次请求发送 |
 | 思考强度 | ✅ 完成 · 已验请求体 | 关闭 / 低 / 标准 / 高，映射 `output_config.effort`；输入条胶囊可直接改 |
@@ -65,14 +66,21 @@
 | App 图标 | ✅ 完成 | 米白底深墨剪影蓝鲸（负空间眼睛 / 鳍线 / 水滴），`Assets.xcassets/AppIcon` 单尺寸 1024；主屏 60/76pt 已验证 |
 | 真机签名 | ✅ 已完成 | 已装真机并实机测试；步骤见 `docs/DEVICE.md`，免费账号 7 天有效 |
 
-### 2.1 传输链路已验证（mock + 实机），usage 字段待对真值
+### 2.1 传输链路已用真实 Key 验收（2026-11-26）
 
-第 10 轮用本地 mock 把整条链路跑通：请求体、SSE 解析（16 个事件）、渲染、落库、重启回读。第 19 轮之前用户实机确认「基本可用」，真实请求、流式、余额都已跑过。继续对官方返回的重点是四件事：
+第 10 轮用本地 mock 跑通链路；第 27 轮拿真实 Key 把待验证项逐条对了一遍：
 
-1. 官方 `content_block_start` 里 `server_tool_use` 的 `input` 结构和 `kind` 字段，是否和 mock 假设的一致。
-2. 联网搜索时 `web_search_tool_result` 的 `encrypted_content` / `signature` 能否原样回传（第 7 轮实现的，没跑过真的）。
-3. `message_delta` 里的 `title` 字段（会话标题）是否真的会来。
-4. **usage 的真实口径**：`/anthropic/v1/messages` 的 `input_tokens` 按 Anthropic 语义应只算未命中部分，DeepSeek 原生 `prompt_tokens` 却含命中量。`Usage.inputIncludesCache` 两种都接：看到 `prompt_cache_hit_tokens` 才按原生口径合并。实机跑一轮后核对「本轮输入」是否等于上下文规模，偏差大就说明兼容层用了另一套。
+| 项 | 结论 |
+|---|---|
+| `message_start` 的 usage | ✅ 带 `input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`，Anthropic 口径 |
+| `message_delta` 的 usage | ✅ 带最终 `output_tokens` 与 `output_tokens_details.thinking_tokens` |
+| `message_delta.delta.title` | ✅ 真实存在（例：「身份介绍」），但客户端要带 `title.enabled` 才会返回 |
+| 缓存命中字段 | ⚠️ 恒为 0（重复请求、带历史前缀也一样），兼容层不透传命中量；指标条在没有命中数据时不显示该项 |
+| `message_stop` | ✅ 正常发出，断流检测不会误判 |
+| `document` 块 + Files API | ✅ 402 字节 PDF 上传 2.3 秒返回 `file_id`，带 beta 头引用后模型能读出内容 |
+| `server_tool_use` / `encrypted_content` | 仍未验证（联网搜索没在真 Key 下跑过） |
+
+**输出预算**：真实测试里 `max_tokens: 30` 时 30 个 token 全被 thinking 吃光、正文为空、`stop_reason` 为 `max_tokens`。默认预算已从 8192 提到 32768，截断时消息底部会给提示。
 
 验证方法：把 Key 存到 `.secrets/api-key`（已在 `.gitignore` 里），然后
 
@@ -865,6 +873,29 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 - 自检 114 条无回归
 
 **没验证到的**：真机切后台后的实际续跑时长。模拟器没有可靠的后台挂起时序，`beginBackgroundTask` 的 30 秒窗口只能在真机上确认；超过 30 秒仍会被系统挂起。
+
+### 2026-11-26 · 第 27 轮：真实 Key 验收
+
+拿真实 Key 把 §2.1 的待验证项跑了一遍，同时暴露并修掉六处问题。
+
+**修掉的问题**
+
+| 问题 | 修法 |
+|---|---|
+| 余额显示 `$0.00`：API 同时返回 USD 0 与 CNY 18.77，App 取了第一条 | `BalanceSnapshot.primary` 优先有余额的币种，其次 CNY |
+| 回答容易「思考完没正文」：`max_tokens` 8192 含思考 token，30 token 测试时正文为 0 | 默认预算 8192 → 32768；`stop_reason == max_tokens` 时底部显示「回答达到输出上限」 |
+| 缓存命中恒 0：Anthropic 兼容层不透传命中量 | 指标条只在有命中数据时显示缓存项，明细保留原始值并说明 |
+| 会话标题从没启用：请求没带 `title.enabled` | `currentOptions` 补上，顶栏与历史同步服务端标题 |
+| 剩余上下文显示 `1000K` | 999,500 以上进位显示 `1.0M` |
+| 之前怀疑的 usage 口径 | 确认为 Anthropic 语义，`input_tokens` 只算未命中部分，现有合并逻辑正确 |
+
+**验证方式**
+
+- curl 直连（`--noproxy '*'`，本机代理对国内站点是负优化）：余额、两轮对话、`max_tokens` 截断、缓存前缀、文件上传 + `document` 块
+- 模拟器 App 真实请求：余额 `¥18.51`、回复正常、指标真实（`1.0M` / `118 tok/s`）、顶栏显示服务端标题「Swift actor 隔离解释」
+- 文件链路：402 字节 PDF 上传 2.3 秒返回 `file_id`，模型能读出文档里的字符串
+
+**Key 安全**：测试 Key 存在 `.secrets/api-key`（已 gitignore），没有写进代码或提交。该 Key 已在对话中明文出现过，测试后建议到平台轮换。
 
 ---
 
