@@ -8,6 +8,7 @@
 排障开关：
   MOCK_BALANCE_FAIL_TIMES=2  前两次余额请求回 503，用来验自动重试
   MOCK_FILES_FAIL_TIMES=1    前几次文件上传回 503，用来验上传失败提示
+  MOCK_CHAT_FAIL_TIMES=1     前几次对话请求回 500，用来验消息重试
   MOCK_DELAY=0.12            每个 SSE 事件之间的间隔，放慢流式便于截实时速度
 """
 import json
@@ -20,10 +21,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8710
 FAIL_TIMES = int(os.environ.get("MOCK_BALANCE_FAIL_TIMES", "0"))
 FILES_FAIL_TIMES = int(os.environ.get("MOCK_FILES_FAIL_TIMES", "0"))
+CHAT_FAIL_TIMES = int(os.environ.get("MOCK_CHAT_FAIL_TIMES", "0"))
 DELAY = float(os.environ.get("MOCK_DELAY", "0.02"))
 REQ_DIR = "/tmp/mock-requests"
 os.makedirs(REQ_DIR, exist_ok=True)
-counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0}
+counter = {"n": 0, "balance_failures": 0, "files": 0, "file_failures": 0, "chat_failures": 0}
 
 
 def parse_multipart(body, content_type):
@@ -179,6 +181,12 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         sys.stderr.write("[mock] messages beta=%s\n" % self.headers.get("anthropic-beta", "-"))
+
+        if counter["chat_failures"] < CHAT_FAIL_TIMES:
+            counter["chat_failures"] += 1
+            sys.stderr.write("[mock] messages 500 #%d\n" % counter["chat_failures"])
+            self.send_json(500, {"error": {"message": "mock 服务端错误"}})
+            return
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

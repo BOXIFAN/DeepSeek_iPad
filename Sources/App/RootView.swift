@@ -61,7 +61,8 @@ struct RootView: View {
                     onOpenSettings: { showSettings = true },
                     onOpenImage: { images, index in
                         gallery = GalleryPresentation(images: images, index: index)
-                    }
+                    },
+                    onRetry: retryLastRound
                 )
                 .safeAreaInset(edge: .top, spacing: 0) {
                     topBar
@@ -133,6 +134,13 @@ struct RootView: View {
         .onChange(of: chat.isStreaming) { _, streaming in
             if !streaming {
                 balance.refreshIfStale(within: 10)
+                // 调试钩子：失败后自动点一次「重试」，用来验证重试链路
+                if ProcessInfo.processInfo.environment["DS_AUTO_RETRY"] == "1",
+                   chat.canRetryLastRound {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        retryLastRound()
+                    }
+                }
             }
         }
         // 从后台回来、切分屏、解锁后都补一次；这是真机上余额卡片停在旧值的主因
@@ -749,6 +757,13 @@ struct RootView: View {
             sendText(prompt, images: images)
         }
 
+        // 验证「中断后重试」：流式中途自动停一次
+        if let raw = environment["DS_AUTO_STOP_MS"], let delay = Int(raw), delay > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
+                chat.stop()
+            }
+        }
+
         // 验证「流式中切会话」：旧任务收尾不能把用量或消息写进新会话
         if environment["DS_SWITCH_DURING_STREAM"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
@@ -929,21 +944,29 @@ struct RootView: View {
         sendText(text, images: images, documents: documents)
     }
 
-    private func sendText(_ text: String,
-                          images: [MessageImage] = [],
-                          documents: [MessageDocument] = []) {
-        let options = ChatClient.Options(
+    private var currentOptions: ChatClient.Options {
+        ChatClient.Options(
             model: model,
             thinking: effort.isEnabled,
             thinkingEffort: effort.apiValue,
             webSearch: search,
             systemPrompt: PromptComposer.system(defaultPrompt: systemPrompt, skills: skills)
         )
+    }
+
+    private func sendText(_ text: String,
+                          images: [MessageImage] = [],
+                          documents: [MessageDocument] = []) {
         chat.send(text,
                   images: images,
                   documents: documents,
                   apiKey: KeychainStore.read() ?? "",
-                  options: options)
+                  options: currentOptions)
+    }
+
+    /// 重试最后一轮：失败的请求、被中断的回复都走这里。
+    private func retryLastRound() {
+        chat.retryLastRound(apiKey: KeychainStore.read() ?? "", options: currentOptions)
     }
 
     private func select(_ item: HistoryItem) {

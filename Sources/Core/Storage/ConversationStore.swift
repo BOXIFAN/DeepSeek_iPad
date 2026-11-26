@@ -77,6 +77,16 @@ final class ConversationStore {
         return message
     }
 
+    /// 删掉这个会话最后一条助手消息。重试失败/中断的那一轮时用，避免历史里留两条回复。
+    func deleteLastAssistantMessage(in conversation: StoredConversation) {
+        guard let last = conversation.messages
+            .filter({ $0.role == "assistant" })
+            .max(by: { $0.order < $1.order }) else { return }
+        context.delete(last)
+        conversation.updatedAt = Date()
+        save()
+    }
+
     func save() {
         guard context.hasChanges else { return }
         do {

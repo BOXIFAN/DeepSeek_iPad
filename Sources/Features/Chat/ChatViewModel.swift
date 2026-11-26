@@ -221,6 +221,37 @@ final class ChatViewModel {
             "content": content
         ])
 
+        startRound(apiKey: apiKey, options: options)
+    }
+
+    /// 这条助手回复能不能重试：失败或被中断，且确实是最后一条。
+    var canRetryLastRound: Bool {
+        guard !isStreaming, let last = messages.last, last.role == .assistant else { return false }
+        return last.errorText != nil || last.stopReason == "failed" || last.stopReason == "stopped"
+    }
+
+    /// 重试最后一轮：丢掉失败的助手回复与它的历史 / 落库记录，用同一条用户消息重发。
+    func retryLastRound(apiKey: String, options: ChatClient.Options) {
+        guard canRetryLastRound else { return }
+        guard let user = messages.last(where: { $0.role == .user }) else { return }
+        guard !apiKey.isEmpty else {
+            errorText = "还没填 API Key，先去设置里填一下"
+            return
+        }
+
+        messages.removeLast()
+        if history.last?["role"] as? String == "assistant" {
+            history.removeLast()
+        }
+        if let conversation = currentConversation {
+            store.deleteLastAssistantMessage(in: conversation)
+        }
+        errorText = nil
+
+        startRound(apiKey: apiKey, options: options)
+    }
+
+    private func startRound(apiKey: String, options: ChatClient.Options) {
         let assistantID = UUID().uuidString
         messages.append(DisplayMessage(id: assistantID, role: .assistant, text: "", blocks: [], isStreaming: true))
         isStreaming = true

@@ -9,6 +9,8 @@ struct FloatingChatBody: View {
     var onOpenSettings: () -> Void
     /// 点开某条消息里的第几张图
     var onOpenImage: ([MessageImage], Int) -> Void
+    /// 重试最后一轮（失败或被中断时出现）
+    var onRetry: () -> Void
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -21,8 +23,8 @@ struct FloatingChatBody: View {
                             onOpenSettings: onOpenSettings
                         )
                     } else {
-                        ForEach(viewModel.messages) { message in
-                            messageRow(message)
+                        ForEach(Array(viewModel.messages.enumerated()), id: \.element.id) { index, message in
+                            messageRow(message, isLast: index == viewModel.messages.count - 1)
                         }
                     }
                     Color.clear.frame(height: 1).id("bottom")
@@ -47,12 +49,12 @@ struct FloatingChatBody: View {
     }
 
     @ViewBuilder
-    private func messageRow(_ message: ChatViewModel.DisplayMessage) -> some View {
+    private func messageRow(_ message: ChatViewModel.DisplayMessage, isLast: Bool) -> some View {
         switch message.role {
         case .user:
             userBubble(message)
         case .assistant:
-            assistantBody(message)
+            assistantBody(message, isLast: isLast)
         }
     }
 
@@ -133,7 +135,7 @@ struct FloatingChatBody: View {
         }
     }
 
-    private func assistantBody(_ message: ChatViewModel.DisplayMessage) -> some View {
+    private func assistantBody(_ message: ChatViewModel.DisplayMessage, isLast: Bool) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(ContentBlock.grouped(message.blocks)) { block in
                 BlockView(block: block)
@@ -152,29 +154,56 @@ struct FloatingChatBody: View {
                 errorBanner(error)
             }
 
-            if !message.isStreaming && !message.blocks.isEmpty {
-                copyRow(message)
+            if !message.isStreaming && (!message.blocks.isEmpty || canRetry(message)) {
+                footerRow(message, isLast: isLast)
             }
         }
     }
 
-    private func copyRow(_ message: ChatViewModel.DisplayMessage) -> some View {
+    /// 消息底部操作：复制正文；失败或被中断时给「重试」，只出现在最后一轮。
+    private func footerRow(_ message: ChatViewModel.DisplayMessage, isLast: Bool) -> some View {
         HStack(spacing: 18) {
-            Button {
-                let text = message.blocks.compactMap { block -> String? in
-                    if case .text(_, let text, _) = block { return text }
-                    return nil
-                }.joined(separator: "\n\n")
-                UIPasteboard.general.string = text
-            } label: {
-                Label("复制", systemImage: "doc.on.doc")
+            if hasCopyableText(message) {
+                Button {
+                    UIPasteboard.general.string = plainText(of: message)
+                } label: {
+                    Label("复制", systemImage: "doc.on.doc")
+                }
             }
+
+            if isLast && canRetry(message) {
+                Button(action: onRetry) {
+                    Label("重试", systemImage: "arrow.clockwise")
+                }
+                .foregroundStyle(Theme.accent)
+            }
+
             Spacer()
         }
         .font(.system(size: 12))
         .foregroundStyle(.tertiary)
         .buttonStyle(.plain)
         .padding(.top, 2)
+    }
+
+    private func canRetry(_ message: ChatViewModel.DisplayMessage) -> Bool {
+        message.errorText != nil
+            || message.stopReason == "failed"
+            || message.stopReason == "stopped"
+    }
+
+    private func hasCopyableText(_ message: ChatViewModel.DisplayMessage) -> Bool {
+        message.blocks.contains { block in
+            if case .text(_, let text, _) = block { return !text.isEmpty }
+            return false
+        }
+    }
+
+    private func plainText(of message: ChatViewModel.DisplayMessage) -> String {
+        message.blocks.compactMap { block -> String? in
+            if case .text(_, let text, _) = block { return text }
+            return nil
+        }.joined(separator: "\n\n")
     }
 
     private func errorBanner(_ text: String) -> some View {
