@@ -823,7 +823,7 @@ DeepSeek 的 Anthropic 兼容接口支持工具调用，让模型自己"加载�
 
 - `ConversationStore.rename` 写 `title` 与 `titleIsManual`，不碰 `updatedAt`（改名不该改变排序）。
 - `titleIsManual` 置上后，`append` 里服务端下发的自动标题不再覆盖它。
-- 入口两个：历史行左滑「重命名」，或长按 / 右键菜单。弹窗用系统 alert + `TextField`，预填当前标题。
+- 入口：历史行左滑出「重命名 / 删除」两个按钮（关闭全滑删除防误触），长按 / 右键菜单也给这两项。弹窗用系统 alert + `TextField`，预填当前标题。
 - 改的是当前会话时，`ChatViewModel.applyManualTitle` 同步顶栏并清掉 `generatedTitle`。
 
 **搜索**

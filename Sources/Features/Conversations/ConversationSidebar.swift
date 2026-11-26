@@ -44,20 +44,19 @@ struct HistoryPanel: View {
                             .listRowInsets(EdgeInsets(top: 1, leading: 10, bottom: 1, trailing: 10))
                             .contentShape(Rectangle())
                             .onTapGesture { onSelect(item) }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    onDelete(item)
-                                } label: {
-                                    Label("删除", systemImage: "trash")
-                                }
-                            }
-                            .swipeActions(edge: .leading) {
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button {
                                     onRename(item)
                                 } label: {
                                     Label("重命名", systemImage: "pencil")
                                 }
                                 .tint(Theme.accent)
+
+                                Button(role: .destructive) {
+                                    onDelete(item)
+                                } label: {
+                                    Label("删除", systemImage: "trash")
+                                }
                             }
                             .contextMenu {
                                 Button {
